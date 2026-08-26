@@ -1,0 +1,1185 @@
+import { current, produce } from "immer";
+import { flattenWords, segmentCaptions } from "./captions";
+import { digestBranch, digestProject } from "./digest";
+import { ensureStandardTracks, validateImport } from "./import";
+import { allowsOverlap, collectInvariantViolations, recomputeDuration } from "./invariants";
+import { isValidRange, rangeDuration, rangesIntersect } from "./time";
+import type {
+  Branch,
+  BusContext,
+  ChangedRange,
+  ClipInstance,
+  Command,
+  CommandError,
+  EditOp,
+  EditorState,
+  Receipt,
+  Result,
+  TimeRange,
+  Track,
+  Transition,
+  Warning,
+} from "./types";
+
+const HUMAN_ONLY: Command["type"][] = ["SetLock", "AcceptBranch", "RecordExport", "ResetProject"];
+const BRANCH_WRITES: Command["type"][] = [
+  "ApplyEditBatch",
+  "StyleCaptions",
+  "PlaceBroll",
+  "SetCrop",
+  "AddComment",
+  "ProposeCommentResolution",
+  "Undo",
+  "Redo",
+  "PlaceClip",
+  "PlaceAudio",
+  "SetTransition",
+  "SetGain",
+  "MuteTrack",
+  "SetLock",
+];
+const MAX_BATCH_OPS = 40;
+const MAX_UNDO = 50;
+
+function fail(error: CommandError): Result {
+  return { ok: false, error };
+}
+
+function getBranch(state: EditorState, branchId: string): Branch | undefined {
+  return state.branches[branchId];
+}
+
+function requireHuman(command: Command): CommandError | null {
+  if (HUMAN_ONLY.includes(command.type) && command.actor.type !== "human") {
+    return {
+      code: "UNAUTHORIZED",
+      message: `${command.type} is human-only`,
+    };
+  }
+  return null;
+}
+
+function requireWritableBranch(state: EditorState, command: Command): CommandError | null {
+  if (!BRANCH_WRITES.includes(command.type) || !("payload" in command) || !("branchId" in command.payload)) {
+    return null;
+  }
+  const branch = state.branches[command.payload.branchId];
+  if (!branch) return { code: "BRANCH_NOT_FOUND", message: "Unknown branch" };
+  if (branch.status !== "working") {
+    return { code: "UNAUTHORIZED", message: `Branch ${branch.name} is ${branch.status}; create a working branch before editing` };
+  }
+  return null;
+}
+
+function versionCheck(branch: Branch, expected: number): CommandError | null {
+  if (branch.branchVersion !== expected) {
+    return {
+      code: "CONFLICT",
+      message: `expected version ${expected}, current is ${branch.branchVersion}`,
+      branchVersion: branch.branchVersion,
+    };
+  }
+  return null;
+}
+
+function assetCheck(state: EditorState, assetId: string): CommandError | null {
+  if (!state.assets.some((asset) => asset.assetId === assetId)) {
+    return { code: "ASSET_NOT_FOUND", message: `Unknown asset ${assetId}` };
+  }
+  return null;
+}
+
+function lockHits(branch: Branch, ranges: TimeRange[]): LockedRangeHit | null {
+  for (const lock of branch.locks) {
+    if (ranges.some((range) => rangesIntersect(range, lock))) {
+      return { lockId: lock.lockId, range: { startMs: lock.startMs, endMs: lock.endMs } };
+    }
+  }
+  return null;
+}
+
+interface LockedRangeHit {
+  lockId: string;
+  range: TimeRange;
+}
+
+function bump(branch: Branch, operationId: string) {
+  branch.branchVersion += 1;
+  branch.operationIds.push(operationId);
+  branch.durationMs = recomputeDuration(branch);
+}
+
+function pushHistory(state: EditorState, branchId: string, operationId: string, before: Branch, after: Branch) {
+  const stack = state.history[branchId] ?? { undo: [], redo: [] };
+  stack.undo.push({ operationId, before, after });
+  if (stack.undo.length > MAX_UNDO) stack.undo.shift();
+  stack.redo = [];
+  state.history[branchId] = stack;
+}
+
+function pushEvent(state: EditorState, ctx: BusContext, command: Command, receipt: Receipt) {
+  state.events.push({
+    eventId: ctx.id(),
+    at: ctx.now(),
+    actorType: command.actor.type,
+    commandType: command.type,
+    branchId: receipt.branchId,
+    branchVersion: receipt.branchVersion,
+    summary: receipt.summary,
+    durationDeltaMs: receipt.durationDeltaMs,
+    changedRangeCount: receipt.changedRanges.length,
+  });
+}
+
+function receiptFor(
+  ctx: BusContext,
+  branch: Branch,
+  state: EditorState,
+  summary: string,
+  extra: Partial<Receipt> = {},
+): Receipt {
+  return {
+    operationId: extra.operationId ?? ctx.id(),
+    summary,
+    branchId: branch.branchId,
+    branchVersion: branch.branchVersion,
+    stateDigest: digestBranch(branch),
+    durationMs: branch.durationMs,
+    changedRanges: extra.changedRanges ?? [],
+    warnings: extra.warnings ?? [],
+    ...extra,
+  };
+}
+
+function findItem(branch: Branch, itemId: string): { track: Track; item: ClipInstance; index: number } | null {
+  for (const track of branch.tracks) {
+    const index = track.items.findIndex((item) => item.itemId === itemId);
+    if (index >= 0) return { track, item: track.items[index], index };
+  }
+  return null;
+}
+
+function applyGain(branch: Branch, itemId: string, gain: number) {
+  if (!Number.isFinite(gain) || gain < 0 || gain > 2) {
+    throw Object.assign(new Error("gain must be between 0 and 2"), { code: "VALIDATION_ERROR" });
+  }
+  const found = findItem(branch, itemId);
+  if (!found) throw Object.assign(new Error("unknown item"), { code: "INVARIANT_VIOLATION" });
+  found.item.gain = gain;
+}
+
+function applyMute(branch: Branch, trackId: string, muted: boolean) {
+  const track = branch.tracks.find((item) => item.trackId === trackId);
+  if (!track) throw Object.assign(new Error("unknown track"), { code: "INVARIANT_VIOLATION" });
+  track.muted = muted;
+}
+
+function applyTransition(
+  branch: Branch,
+  itemId: string,
+  transitionIn?: Transition,
+  transitionOut?: Transition,
+  fadeMs?: number,
+) {
+  const found = findItem(branch, itemId);
+  if (!found) throw Object.assign(new Error("unknown item"), { code: "INVARIANT_VIOLATION" });
+  if (fadeMs != null && (fadeMs < 0 || fadeMs > 5000)) {
+    throw Object.assign(new Error("fadeMs must be 0–5000"), { code: "VALIDATION_ERROR" });
+  }
+  if (transitionIn) found.item.transitionIn = transitionIn;
+  if (transitionOut) found.item.transitionOut = transitionOut;
+  if (fadeMs != null) found.item.fadeMs = fadeMs;
+}
+
+function buildPlacedItem(
+  state: EditorState,
+  _branch: Branch,
+  ctx: BusContext,
+  opts: {
+    assetId: string;
+    trackId: string;
+    startMs: number;
+    durationMs?: number;
+    sourceInMs?: number;
+    gain?: number;
+    fit?: ClipInstance["fit"];
+    anchor?: ClipInstance["anchor"];
+    transitionIn?: Transition;
+    transitionOut?: Transition;
+    fadeMs?: number;
+  },
+): ClipInstance {
+  const asset = state.assets.find((item) => item.assetId === opts.assetId);
+  if (!asset) throw Object.assign(new Error("unknown asset"), { code: "ASSET_NOT_FOUND" });
+  const sourceInMs = opts.sourceInMs ?? 0;
+  const remaining = Math.max(0, (asset.durationMs ?? 0) - sourceInMs);
+  const hold = asset.kind === "graphic" || asset.kind === "image";
+  const durationMs = opts.durationMs ?? (hold ? 3000 : remaining);
+  if (durationMs <= 0) {
+    throw Object.assign(new Error("invalid duration"), { code: "INVALID_RANGE" });
+  }
+  const item: ClipInstance = {
+    itemId: ctx.id(),
+    assetId: opts.assetId,
+    trackId: opts.trackId,
+    startMs: opts.startMs,
+    endMs: opts.startMs + durationMs,
+    sourceInMs,
+    sourceOutMs: sourceInMs + durationMs,
+    label: asset.label,
+    fit: opts.fit,
+    anchor: opts.anchor,
+    gain: opts.gain,
+    transitionIn: opts.transitionIn,
+    transitionOut: opts.transitionOut,
+    fadeMs: opts.fadeMs,
+  };
+  if (asset.durationMs && item.sourceOutMs > asset.durationMs && (asset.kind === "video" || asset.kind === "audio")) {
+    item.sourceOutMs = asset.durationMs;
+    item.endMs = item.startMs + (item.sourceOutMs - item.sourceInMs);
+  }
+  return item;
+}
+
+function placeOnTrack(
+  branch: Branch,
+  item: ClipInstance,
+  replaceExisting: boolean,
+  required: boolean,
+  change: string,
+): ChangedRange[] {
+  const track = branch.tracks.find((entry) => entry.trackId === item.trackId);
+  if (!track) {
+    throw Object.assign(new Error("unknown track"), { code: "INVARIANT_VIOLATION" });
+  }
+  const range = { startMs: item.startMs, endMs: item.endMs };
+  const hit = lockHits(branch, [range]);
+  if (hit) {
+    if (required) {
+      throw Object.assign(new Error("locked range"), {
+        code: "LOCKED_RANGE" satisfies CommandError["code"],
+        lockId: hit.lockId,
+      });
+    }
+    return [];
+  }
+  if (replaceExisting) {
+    track.items = track.items.filter((existing) => !rangesIntersect(existing, range));
+  } else if (!allowsOverlap(track) && track.items.some((existing) => rangesIntersect(existing, range))) {
+    throw Object.assign(new Error(`${track.trackId} overlap`), { code: "INVARIANT_VIOLATION" });
+  }
+  track.items.push(item);
+  track.items.sort((a, b) => a.startMs - b.startMs);
+  branch.durationMs = recomputeDuration(branch);
+  return [{ startMs: item.startMs, endMs: item.endMs, changes: [change] }];
+}
+
+function shiftRange<T extends { startMs: number; endMs: number }>(
+  entity: T,
+  cut: TimeRange,
+): T | null {
+  const dur = rangeDuration(cut);
+  if (entity.endMs <= cut.startMs) return entity;
+  if (entity.startMs >= cut.endMs) {
+    return { ...entity, startMs: entity.startMs - dur, endMs: entity.endMs - dur };
+  }
+  if (entity.startMs >= cut.startMs && entity.endMs <= cut.endMs) return null;
+  if (entity.startMs < cut.startMs && entity.endMs > cut.endMs) {
+    return { ...entity, endMs: entity.endMs - dur };
+  }
+  if (entity.startMs < cut.startMs) {
+    return { ...entity, endMs: cut.startMs };
+  }
+  return {
+    ...entity,
+    startMs: cut.startMs,
+    endMs: entity.endMs - dur,
+  };
+}
+
+function rippleDelete(branch: Branch, range: TimeRange, id: () => string) {
+  const cut = rangeDuration(range);
+  for (const track of branch.tracks) {
+    const next: ClipInstance[] = [];
+    for (const item of track.items) {
+      if (item.endMs <= range.startMs) {
+        next.push(item);
+        continue;
+      }
+      if (item.startMs >= range.endMs) {
+        next.push({ ...item, startMs: item.startMs - cut, endMs: item.endMs - cut });
+        continue;
+      }
+      if (item.startMs >= range.startMs && item.endMs <= range.endMs) {
+        continue;
+      }
+      if (item.startMs < range.startMs && item.endMs > range.endMs) {
+        const leftDur = range.startMs - item.startMs;
+        const rightDur = item.endMs - range.endMs;
+        next.push({
+          ...item,
+          endMs: range.startMs,
+          sourceOutMs: item.sourceInMs + leftDur,
+        });
+        next.push({
+          ...item,
+          itemId: id(),
+          startMs: range.startMs,
+          endMs: range.startMs + rightDur,
+          sourceInMs: item.sourceOutMs - rightDur,
+        });
+        continue;
+      }
+      if (item.startMs < range.startMs) {
+        const keep = range.startMs - item.startMs;
+        next.push({
+          ...item,
+          endMs: range.startMs,
+          sourceOutMs: item.sourceInMs + keep,
+        });
+        continue;
+      }
+      const trimIn = range.endMs - item.startMs;
+      next.push({
+        ...item,
+        startMs: range.startMs,
+        endMs: item.endMs - cut,
+        sourceInMs: item.sourceInMs + trimIn,
+      });
+    }
+    track.items = next.filter((item) => item.endMs > item.startMs);
+  }
+  branch.captions = branch.captions
+    .map((cue) => shiftRange(cue, range))
+    .filter((cue): cue is NonNullable<typeof cue> => Boolean(cue && cue.endMs > cue.startMs));
+  branch.comments = branch.comments
+    .map((comment) => {
+      const shifted = shiftRange({ ...comment, startMs: comment.range.startMs, endMs: comment.range.endMs }, range);
+      if (!shifted) return null;
+      return { ...comment, range: { startMs: shifted.startMs, endMs: shifted.endMs } };
+    })
+    .filter((comment): comment is NonNullable<typeof comment> => Boolean(comment));
+  branch.durationMs = recomputeDuration(branch);
+}
+
+function changedForRipple(range: TimeRange, durationMs: number): ChangedRange[] {
+  return [{ startMs: range.startMs, endMs: durationMs, changes: ["ripple_delete"] }];
+}
+
+function applyOp(
+  state: EditorState,
+  branch: Branch,
+  op: EditOp,
+  ctx: BusContext,
+): { skipped?: { op: string; reason: string }; warning?: Warning; changed: ChangedRange[] } {
+  const required = op.required !== false;
+
+  if (op.op === "ripple_delete") {
+    if (!isValidRange(op.range) || op.range.endMs > branch.durationMs + 1) {
+      throw Object.assign(new Error("invalid range"), { code: "INVALID_RANGE" satisfies CommandError["code"] });
+    }
+    const changed = changedForRipple(op.range, branch.durationMs);
+    const hit = lockHits(branch, changed);
+    if (hit) {
+      if (required) {
+        throw Object.assign(new Error("locked range"), {
+          code: "LOCKED_RANGE" satisfies CommandError["code"],
+          lockId: hit.lockId,
+        });
+      }
+      return {
+        skipped: { op: op.op, reason: "LOCKED_RANGE" },
+        warning: {
+          code: "LOCKED_RANGE",
+          message: `Skipped tightening ${hit.range.startMs / 1000}–${hit.range.endMs / 1000} s.`,
+          lockId: hit.lockId,
+          range: hit.range,
+        },
+        changed: [],
+      };
+    }
+    rippleDelete(branch, op.range, ctx.id);
+    return { changed };
+  }
+
+  if (op.op === "replace_range") {
+    const assetErr = assetCheck(state, op.assetId);
+    if (assetErr) throw Object.assign(new Error(assetErr.message), { code: assetErr.code });
+    if (!isValidRange(op.range)) {
+      throw Object.assign(new Error("invalid range"), { code: "INVALID_RANGE" satisfies CommandError["code"] });
+    }
+    const replacementDur = op.source.endMs - op.source.inMs;
+    if (replacementDur <= 0) {
+      throw Object.assign(new Error("invalid source"), { code: "INVALID_RANGE" satisfies CommandError["code"] });
+    }
+    const delta = replacementDur - rangeDuration(op.range);
+    const changed: ChangedRange[] =
+      delta === 0
+        ? [{ startMs: op.range.startMs, endMs: op.range.endMs, changes: ["replace_range"] }]
+        : [{ startMs: op.range.startMs, endMs: branch.durationMs, changes: ["replace_range"] }];
+    const hit = lockHits(branch, changed);
+    if (hit) {
+      if (required) {
+        throw Object.assign(new Error("locked range"), {
+          code: "LOCKED_RANGE" satisfies CommandError["code"],
+          lockId: hit.lockId,
+        });
+      }
+      return {
+        skipped: { op: op.op, reason: "LOCKED_RANGE" },
+        warning: {
+          code: "LOCKED_RANGE",
+          message: "Skipped replace that would move a protected range.",
+          lockId: hit.lockId,
+          range: hit.range,
+        },
+        changed: [],
+      };
+    }
+    const track = branch.tracks.find((t) => t.trackId === op.trackId);
+    if (!track) {
+      throw Object.assign(new Error("unknown track"), { code: "INVARIANT_VIOLATION" satisfies CommandError["code"] });
+    }
+    rippleDelete(branch, op.range, ctx.id);
+    const makeItem = (trackId: string): ClipInstance => ({
+      itemId: ctx.id(),
+      assetId: op.assetId,
+      trackId,
+      startMs: op.range.startMs,
+      endMs: op.range.startMs + replacementDur,
+      sourceInMs: op.source.inMs,
+      sourceOutMs: op.source.endMs,
+      label: op.assetId,
+      transitionIn: op.transition,
+      transitionOut: op.transition,
+    });
+    const item = makeItem(op.trackId);
+    const newIds = new Set<string>([item.itemId]);
+    track.items.push(item);
+    if (op.trackId === "v1") {
+      const audio = branch.tracks.find((t) => t.trackId === "a1");
+      if (audio) {
+        const audioItem = makeItem("a1");
+        newIds.add(audioItem.itemId);
+        audio.items.push(audioItem);
+      }
+    }
+    for (const t of branch.tracks) {
+      t.items.sort((a, b) => a.startMs - b.startMs);
+      for (const clip of t.items) {
+        if (newIds.has(clip.itemId)) continue;
+        if (clip.startMs >= op.range.startMs) {
+          clip.startMs += replacementDur;
+          clip.endMs += replacementDur;
+        }
+      }
+    }
+    for (const cue of branch.captions) {
+      if (cue.startMs >= op.range.startMs) {
+        cue.startMs += replacementDur;
+        cue.endMs += replacementDur;
+      }
+    }
+    branch.durationMs = recomputeDuration(branch);
+    return { changed };
+  }
+
+  if (op.op === "extend_still") {
+    const found = findItem(branch, op.itemId);
+    if (!found) {
+      throw Object.assign(new Error("unknown item"), { code: "INVARIANT_VIOLATION" satisfies CommandError["code"] });
+    }
+    if (op.endMs <= found.item.startMs) {
+      throw Object.assign(new Error("invalid range"), { code: "INVALID_RANGE" satisfies CommandError["code"] });
+    }
+    const changed: ChangedRange[] = [
+      {
+        startMs: found.item.startMs,
+        endMs: Math.max(found.item.endMs, op.endMs),
+        changes: ["extend_still"],
+      },
+    ];
+    const hit = lockHits(branch, changed);
+    if (hit) {
+      if (required) {
+        throw Object.assign(new Error("locked range"), {
+          code: "LOCKED_RANGE" satisfies CommandError["code"],
+          lockId: hit.lockId,
+        });
+      }
+      return {
+        skipped: { op: op.op, reason: "LOCKED_RANGE" },
+        warning: { code: "LOCKED_RANGE", message: "Skipped extend into a lock.", lockId: hit.lockId, range: hit.range },
+        changed: [],
+      };
+    }
+    const extra = op.endMs - found.item.endMs;
+    found.item.endMs = op.endMs;
+    found.item.sourceOutMs += extra;
+    branch.durationMs = recomputeDuration(branch);
+    return { changed };
+  }
+
+  if (op.op === "split") {
+    const found = findItem(branch, op.itemId);
+    if (!found || op.atMs <= found.item.startMs || op.atMs >= found.item.endMs) {
+      throw Object.assign(new Error("invalid split"), { code: "INVALID_RANGE" satisfies CommandError["code"] });
+    }
+    const offset = op.atMs - found.item.startMs;
+    const right: ClipInstance = {
+      ...found.item,
+      itemId: ctx.id(),
+      startMs: op.atMs,
+      sourceInMs: found.item.sourceInMs + offset,
+    };
+    found.item.endMs = op.atMs;
+    found.item.sourceOutMs = found.item.sourceInMs + offset;
+    found.track.items.push(right);
+    found.track.items.sort((a, b) => a.startMs - b.startMs);
+    return { changed: [{ startMs: found.item.startMs, endMs: right.endMs, changes: ["split"] }] };
+  }
+
+  if (op.op === "trim") {
+    const found = findItem(branch, op.itemId);
+    if (!found) {
+      throw Object.assign(new Error("unknown item"), { code: "INVARIANT_VIOLATION" satisfies CommandError["code"] });
+    }
+    const startMs = op.startMs ?? found.item.startMs;
+    const endMs = op.endMs ?? found.item.endMs;
+    if (endMs <= startMs) {
+      throw Object.assign(new Error("invalid trim"), { code: "INVALID_RANGE" satisfies CommandError["code"] });
+    }
+    const deltaIn = startMs - found.item.startMs;
+    const deltaOut = found.item.endMs - endMs;
+    found.item.startMs = startMs;
+    found.item.endMs = endMs;
+    found.item.sourceInMs += deltaIn;
+    found.item.sourceOutMs -= deltaOut;
+    branch.durationMs = recomputeDuration(branch);
+    return { changed: [{ startMs, endMs, changes: ["trim"] }] };
+  }
+
+  if (op.op === "delete") {
+    const found = findItem(branch, op.itemId);
+    if (!found) {
+      throw Object.assign(new Error("unknown item"), { code: "INVARIANT_VIOLATION" satisfies CommandError["code"] });
+    }
+    const changed = [{ startMs: found.item.startMs, endMs: found.item.endMs, changes: ["delete"] }];
+    const hit = lockHits(branch, changed);
+    if (hit && required) {
+      throw Object.assign(new Error("locked range"), {
+        code: "LOCKED_RANGE" satisfies CommandError["code"],
+        lockId: hit.lockId,
+      });
+    }
+    found.track.items.splice(found.index, 1);
+    branch.durationMs = recomputeDuration(branch);
+    return { changed };
+  }
+
+  if (op.op === "move") {
+    const found = findItem(branch, op.itemId);
+    if (!found) {
+      throw Object.assign(new Error("unknown item"), { code: "INVARIANT_VIOLATION" satisfies CommandError["code"] });
+    }
+    const dur = found.item.endMs - found.item.startMs;
+    found.item.startMs = op.startMs;
+    found.item.endMs = op.startMs + dur;
+    found.track.items.sort((a, b) => a.startMs - b.startMs);
+    branch.durationMs = recomputeDuration(branch);
+    return { changed: [{ startMs: op.startMs, endMs: op.startMs + dur, changes: ["move"] }] };
+  }
+
+  if (op.op === "place_clip") {
+    const assetErr = assetCheck(state, op.assetId);
+    if (assetErr) throw Object.assign(new Error(assetErr.message), { code: assetErr.code });
+    const item = buildPlacedItem(state, branch, ctx, {
+      assetId: op.assetId,
+      trackId: op.trackId,
+      startMs: op.startMs,
+      durationMs: op.durationMs,
+      sourceInMs: op.sourceInMs,
+    });
+    return { changed: placeOnTrack(branch, item, false, required, "place_clip") };
+  }
+
+  if (op.op === "place_audio") {
+    const assetErr = assetCheck(state, op.assetId);
+    if (assetErr) throw Object.assign(new Error(assetErr.message), { code: assetErr.code });
+    const item = buildPlacedItem(state, branch, ctx, {
+      assetId: op.assetId,
+      trackId: op.trackId,
+      startMs: op.startMs,
+      durationMs: op.durationMs,
+      sourceInMs: op.sourceInMs,
+      gain: op.gain,
+    });
+    return { changed: placeOnTrack(branch, item, false, required, "place_audio") };
+  }
+
+  if (op.op === "set_transition") {
+    applyTransition(branch, op.itemId, op.transitionIn, op.transitionOut, op.fadeMs);
+    const found = findItem(branch, op.itemId)!;
+    return { changed: [{ startMs: found.item.startMs, endMs: found.item.endMs, changes: ["set_transition"] }] };
+  }
+
+  if (op.op === "set_gain") {
+    applyGain(branch, op.itemId, op.gain);
+    const found = findItem(branch, op.itemId)!;
+    return { changed: [{ startMs: found.item.startMs, endMs: found.item.endMs, changes: ["set_gain"] }] };
+  }
+
+  if (op.op === "mute_track") {
+    applyMute(branch, op.trackId, op.muted);
+    return { changed: [{ startMs: 0, endMs: branch.durationMs, changes: ["mute_track"] }] };
+  }
+
+  throw Object.assign(new Error("unsupported"), { code: "UNSUPPORTED_OPERATION" satisfies CommandError["code"] });
+}
+
+function mapTranscript(state: EditorState, branch: Branch) {
+  const v1 = branch.tracks.find((t) => t.trackId === "v1");
+  if (!v1) return state.transcript;
+  return state.transcript.flatMap((segment) => {
+    const mappedWords = (segment.words ?? []).flatMap((word) => {
+      const clip = v1.items.find(
+        (item) => word.startMs >= item.sourceInMs && word.startMs < item.sourceOutMs && item.assetId === "take_1",
+      );
+      const take2 = v1.items.find(
+        (item) =>
+          item.assetId === "take_2" &&
+          word.startMs >= item.sourceInMs &&
+          word.startMs < item.sourceOutMs,
+      );
+      const hit = clip ?? take2;
+      if (!hit) return [];
+      const startMs = hit.startMs + (word.startMs - hit.sourceInMs);
+      const endMs = hit.startMs + (word.endMs - hit.sourceInMs);
+      return [{ ...word, startMs, endMs }];
+    });
+    if (!mappedWords.length && !segment.markers?.includes("silence")) return [];
+    if (!mappedWords.length) return [];
+    return [
+      {
+        ...segment,
+        startMs: mappedWords[0].startMs,
+        endMs: mappedWords[mappedWords.length - 1].endMs,
+        words: mappedWords,
+      },
+    ];
+  });
+}
+
+export function readMappedTranscript(state: EditorState, branchId: string) {
+  const branch = state.branches[branchId];
+  if (!branch) return [];
+  return mapTranscript(state, branch);
+}
+
+export function applyCommand(state: EditorState, command: Command, ctx: BusContext): Result {
+  const unauthorized = requireHuman(command);
+  if (unauthorized) return fail(unauthorized);
+  const unwritable = requireWritableBranch(state, command);
+  if (unwritable) return fail(unwritable);
+
+  if (command.type === "ResetProject") {
+    return {
+      ok: true,
+      state,
+      receipt: {
+        operationId: ctx.id(),
+        summary: "Reset is handled by the store against the canonical snapshot.",
+        stateDigest: digestProject(state),
+        changedRanges: [],
+        warnings: [],
+      },
+    };
+  }
+
+  try {
+    const next = produce(state, (draft) => {
+      for (const branch of Object.values(draft.branches)) {
+        ensureStandardTracks(branch);
+      }
+
+      if (command.type === "ImportAsset") {
+        const invalid = validateImport(command.payload);
+        if (invalid) throw Object.assign(new Error(invalid.message), { code: invalid.code });
+        const assetId = command.payload.assetId ?? ctx.id();
+        if (draft.assets.some((asset) => asset.assetId === assetId)) {
+          throw Object.assign(new Error("asset already exists"), { code: "VALIDATION_ERROR" });
+        }
+        draft.assets.push({
+          assetId,
+          kind: command.payload.kind,
+          label: command.payload.label,
+          uri: command.payload.uri,
+          durationMs: command.payload.durationMs,
+          width: command.payload.width,
+          height: command.payload.height,
+          checksum: command.payload.checksum,
+          preparedTags: ["imported"],
+          posterUri: command.payload.posterUri,
+          mime: command.payload.mime,
+          bytes: command.payload.bytes,
+          imported: true,
+        });
+        const receipt: Receipt = {
+          operationId: ctx.id(),
+          summary: `Imported ${command.payload.label}.`,
+          stateDigest: digestProject(draft),
+          changedRanges: [],
+          warnings: [],
+        };
+        pushEvent(draft, ctx, command, receipt);
+        (draft as EditorState & { __receipt?: Receipt }).__receipt = receipt;
+        return;
+      }
+
+      if (command.type === "CreateBranch") {
+        const base = getBranch(draft, command.payload.baseBranchId);
+        if (!base) throw Object.assign(new Error("branch"), { code: "BRANCH_NOT_FOUND" });
+        const versionErr = versionCheck(base, command.payload.expectedBaseVersion);
+        if (versionErr) throw Object.assign(new Error(versionErr.message), versionErr);
+        if (command.payload.name.length < 1 || command.payload.name.length > 48) {
+          throw Object.assign(new Error("name"), { code: "VALIDATION_ERROR" });
+        }
+        if (Object.keys(draft.branches).length >= 8) {
+          throw Object.assign(new Error("branch limit"), { code: "VALIDATION_ERROR" });
+        }
+        const branchId = ctx.id();
+        const clone = structuredClone(current(base));
+        clone.branchId = branchId;
+        clone.name = command.payload.name;
+        clone.baseBranchId = base.branchId;
+        clone.baseDigest = digestBranch(base);
+        clone.branchVersion = 0;
+        clone.operationIds = [];
+        clone.status = "working";
+        draft.branches[branchId] = clone;
+        draft.history[branchId] = { undo: [], redo: [] };
+        draft.project.activeBranchId = branchId;
+        const receipt = receiptFor(ctx, clone, draft, `Created working branch “${clone.name}”.`);
+        draft.events.push({
+          eventId: ctx.id(),
+          at: ctx.now(),
+          actorType: command.actor.type,
+          commandType: command.type,
+          branchId,
+          branchVersion: 0,
+          summary: receipt.summary,
+        });
+        (draft as EditorState & { __receipt?: Receipt }).__receipt = receipt;
+        return;
+      }
+
+      if (command.type === "SelectActiveBranch") {
+        if (!draft.branches[command.payload.branchId]) {
+          throw Object.assign(new Error("branch"), { code: "BRANCH_NOT_FOUND" });
+        }
+        draft.project.activeBranchId = command.payload.branchId;
+        const branch = draft.branches[command.payload.branchId];
+        (draft as EditorState & { __receipt?: Receipt }).__receipt = receiptFor(
+          ctx,
+          branch,
+          draft,
+          `Viewing ${branch.name}`,
+        );
+        return;
+      }
+
+      if (command.type === "Undo") {
+        const stack = draft.history[command.payload.branchId];
+        if (!stack?.undo.length) {
+          throw Object.assign(new Error("nothing to undo"), { code: "VALIDATION_ERROR" });
+        }
+        const entry = stack.undo.pop()!;
+        stack.redo.push(entry);
+        draft.branches[command.payload.branchId] = structuredClone(current(entry.before));
+        const branch = draft.branches[command.payload.branchId];
+        (draft as EditorState & { __receipt?: Receipt }).__receipt = receiptFor(
+          ctx,
+          branch,
+          draft,
+          "Undid last edit group.",
+        );
+        return;
+      }
+
+      if (command.type === "Redo") {
+        const stack = draft.history[command.payload.branchId];
+        if (!stack?.redo.length) {
+          throw Object.assign(new Error("nothing to redo"), { code: "VALIDATION_ERROR" });
+        }
+        const entry = stack.redo.pop()!;
+        stack.undo.push(entry);
+        draft.branches[command.payload.branchId] = structuredClone(current(entry.after));
+        const branch = draft.branches[command.payload.branchId];
+        (draft as EditorState & { __receipt?: Receipt }).__receipt = receiptFor(
+          ctx,
+          branch,
+          draft,
+          "Redid last edit group.",
+        );
+        return;
+      }
+
+      const branchId =
+        "payload" in command && command.payload && "branchId" in command.payload
+          ? command.payload.branchId
+          : draft.project.activeBranchId;
+      const branch = getBranch(draft, branchId);
+      if (!branch) throw Object.assign(new Error("branch"), { code: "BRANCH_NOT_FOUND" });
+      const before = structuredClone(current(branch));
+
+      if ("payload" in command && command.payload && "expectedBranchVersion" in command.payload) {
+        const versionErr = versionCheck(branch, command.payload.expectedBranchVersion);
+        if (versionErr) throw Object.assign(new Error(versionErr.message), versionErr);
+      }
+
+      let receipt: Receipt;
+
+      if (command.type === "ApplyEditBatch") {
+        if (command.payload.operations.length > MAX_BATCH_OPS) {
+          throw Object.assign(new Error("too many ops"), { code: "VALIDATION_ERROR" });
+        }
+        const skipped: { op: string; reason: string }[] = [];
+        const warnings: Warning[] = [];
+        const changed: ChangedRange[] = [];
+        let applied = 0;
+        const durationBefore = branch.durationMs;
+        for (const op of command.payload.operations) {
+          const result = applyOp(draft, branch, op, ctx);
+          if (result.skipped) {
+            skipped.push(result.skipped);
+            if (result.warning) warnings.push(result.warning);
+            continue;
+          }
+          applied += 1;
+          changed.push(...result.changed);
+        }
+        const violations = collectInvariantViolations(branch, draft.assets);
+        if (violations.length) {
+          throw Object.assign(new Error(violations.join("; ")), {
+            code: "INVARIANT_VIOLATION",
+            violations,
+          });
+        }
+        const operationId = ctx.id();
+        bump(branch, operationId);
+        receipt = receiptFor(ctx, branch, draft, `Applied ${applied} of ${command.payload.operations.length} requested edits.`, {
+          operationId,
+          appliedOperationCount: applied,
+          skippedOperations: skipped,
+          warnings,
+          changedRanges: changed,
+          durationDeltaMs: branch.durationMs - durationBefore,
+          verification: { action: "preview_range", startMs: 0, endMs: Math.min(8000, branch.durationMs) },
+        });
+      } else if (command.type === "StyleCaptions") {
+        const mapped = mapTranscript(draft, branch);
+        const { cues, overflowWarnings } = segmentCaptions({
+          words: flattenWords(mapped),
+          range: command.payload.range,
+          preset: command.payload.preset,
+          maxLines: command.payload.maxLines,
+          maxCharsPerLine: command.payload.maxCharsPerLine,
+          id: ctx.id,
+        });
+        if (command.payload.range) {
+          branch.captions = branch.captions.filter(
+            (cue) => !rangesIntersect(cue, command.payload.range!),
+          );
+          branch.captions.push(...cues);
+          branch.captions.sort((a, b) => a.startMs - b.startMs);
+        } else {
+          branch.captions = cues;
+        }
+        branch.captionStyle = {
+          preset: command.payload.preset,
+          emphasis: command.payload.emphasis,
+          maxLines: command.payload.maxLines,
+          maxCharsPerLine: command.payload.maxCharsPerLine,
+        };
+        const operationId = ctx.id();
+        bump(branch, operationId);
+        receipt = receiptFor(ctx, branch, draft, `Styled ${cues.length} caption cues.`, {
+          operationId,
+          warnings: overflowWarnings.map((message) => ({ code: "CAPTION_OVERFLOW", message })),
+          changedRanges: cues.length
+            ? [{ startMs: cues[0].startMs, endMs: cues[cues.length - 1].endMs, changes: ["caption_reflow"] }]
+            : [],
+        });
+      } else if (command.type === "PlaceBroll") {
+        const assetErr = assetCheck(draft, command.payload.assetId);
+        if (assetErr) throw Object.assign(new Error(assetErr.message), assetErr);
+        if (!isValidRange(command.payload.range)) {
+          throw Object.assign(new Error("invalid range"), { code: "INVALID_RANGE" });
+        }
+        const hit = lockHits(branch, [command.payload.range]);
+        if (hit) {
+          throw Object.assign(new Error("locked"), { code: "LOCKED_RANGE", lockId: hit.lockId });
+        }
+        const track = branch.tracks.find((t) => t.trackId === "v2");
+        if (!track) throw Object.assign(new Error("v2"), { code: "INVARIANT_VIOLATION" });
+        if (command.payload.replaceExisting) {
+          track.items = track.items.filter((item) => !rangesIntersect(item, command.payload.range));
+        }
+        const asset = draft.assets.find((a) => a.assetId === command.payload.assetId)!;
+        const sourceInMs = command.payload.sourceInMs ?? 0;
+        const dur = rangeDuration(command.payload.range);
+        const item: ClipInstance = {
+          itemId: ctx.id(),
+          assetId: command.payload.assetId,
+          trackId: "v2",
+          startMs: command.payload.range.startMs,
+          endMs: command.payload.range.endMs,
+          sourceInMs,
+          sourceOutMs: sourceInMs + dur,
+          label: asset.label,
+          fit: command.payload.fit,
+          anchor: command.payload.anchor,
+          transitionIn: command.payload.transitionIn,
+          transitionOut: command.payload.transitionOut,
+        };
+        if (asset.durationMs && item.sourceOutMs > asset.durationMs && (asset.kind === "video" || asset.kind === "audio")) {
+          item.sourceOutMs = asset.durationMs;
+          item.endMs = item.startMs + (item.sourceOutMs - item.sourceInMs);
+        }
+        track.items.push(item);
+        track.items.sort((a, b) => a.startMs - b.startMs);
+        const operationId = ctx.id();
+        bump(branch, operationId);
+        receipt = receiptFor(ctx, branch, draft, `Placed ${asset.label} on V2.`, {
+          operationId,
+          changedRanges: [{ startMs: item.startMs, endMs: item.endMs, changes: ["place_broll"] }],
+        });
+      } else if (command.type === "SetCrop") {
+        if (command.payload.target.kind === "project") {
+          if (command.payload.aspectRatio) branch.crop.aspectRatio = command.payload.aspectRatio;
+          if (command.payload.anchor) branch.crop.anchor = command.payload.anchor;
+          if (command.payload.normalizedCenter) branch.crop.normalizedCenter = command.payload.normalizedCenter;
+          if (command.payload.scale) branch.crop.scale = command.payload.scale;
+          if (branch.crop.anchor === "face" || branch.crop.anchor === "safe_region") {
+            const take = draft.assets.find((a) => a.assetId === "take_1");
+            const region = take?.safeRegions?.[0];
+            if (region) {
+              branch.crop.normalizedCenter = {
+                x: region.x + region.width / 2,
+                y: region.y + region.height / 2,
+              };
+            }
+          }
+        } else {
+          const found = findItem(branch, command.payload.target.itemId);
+          if (!found) throw Object.assign(new Error("clip"), { code: "INVARIANT_VIOLATION" });
+          found.item.anchor = command.payload.anchor ?? found.item.anchor;
+          if (command.payload.normalizedCenter && command.payload.scale) {
+            found.item.transform = {
+              x: command.payload.normalizedCenter.x,
+              y: command.payload.normalizedCenter.y,
+              scale: command.payload.scale,
+            };
+          }
+        }
+        const operationId = ctx.id();
+        bump(branch, operationId);
+        receipt = receiptFor(ctx, branch, draft, `Updated crop to ${branch.crop.aspectRatio}.`, {
+          operationId,
+          changedRanges: [{ startMs: 0, endMs: branch.durationMs, changes: ["crop"] }],
+        });
+      } else if (command.type === "AddComment") {
+        branch.comments.push({
+          commentId: ctx.id(),
+          authorType: command.actor.type,
+          range: command.payload.range,
+          text: command.payload.text,
+          status: "open",
+        });
+        const operationId = ctx.id();
+        bump(branch, operationId);
+        receipt = receiptFor(ctx, branch, draft, "Pinned a time-coded comment.", {
+          operationId,
+          changedRanges: [command.payload.range],
+        });
+      } else if (command.type === "ProposeCommentResolution") {
+        const comment = branch.comments.find((c) => c.commentId === command.payload.commentId);
+        if (!comment) throw Object.assign(new Error("comment"), { code: "VALIDATION_ERROR" });
+        if (command.actor.type === "agent" && comment.authorType === "human") {
+          comment.resolutionProposal = command.payload.proposal;
+          comment.status = "proposed";
+        } else if (command.actor.type === "human") {
+          comment.status = "resolved";
+        } else {
+          throw Object.assign(new Error("cannot delete human comments"), { code: "UNAUTHORIZED" });
+        }
+        const operationId = ctx.id();
+        bump(branch, operationId);
+        receipt = receiptFor(ctx, branch, draft, "Updated comment.", { operationId, changedRanges: [comment.range] });
+      } else if (command.type === "SetLock") {
+        if (command.payload.action === "lock") {
+          branch.locks.push({
+            lockId: ctx.id(),
+            startMs: command.payload.range.startMs,
+            endMs: command.payload.range.endMs,
+            label: command.payload.label,
+            createdByHumanAt: ctx.now(),
+          });
+        } else if (command.payload.action === "unlock") {
+          const lockId = command.payload.lockId;
+          branch.locks = branch.locks.filter((lock) => lock.lockId !== lockId);
+        }
+        const operationId = ctx.id();
+        bump(branch, operationId);
+        receipt = receiptFor(
+          ctx,
+          branch,
+          draft,
+          command.payload.action === "lock" ? "Protected a range." : "Removed a lock.",
+          { operationId },
+        );
+      } else if (command.type === "AcceptBranch") {
+        for (const candidate of Object.values(draft.branches)) {
+          if (candidate.status === "accepted") candidate.status = "working";
+        }
+        branch.status = "accepted";
+        draft.project.selectedFinalBranchId = branch.branchId;
+        const operationId = ctx.id();
+        receipt = receiptFor(ctx, branch, draft, `Selected ${branch.name} as the final cut.`, { operationId });
+      } else if (command.type === "RecordExport") {
+        if (draft.project.selectedFinalBranchId !== branch.branchId) {
+          throw Object.assign(new Error("accept first"), { code: "VALIDATION_ERROR" });
+        }
+        draft.exports.push({
+          exportId: ctx.id(),
+          branchId: branch.branchId,
+          stateDigest: digestBranch(branch),
+          durationMs: branch.durationMs,
+          width: command.payload.width,
+          height: command.payload.height,
+          createdAt: ctx.now(),
+          uri: command.payload.uri,
+          bytes: command.payload.bytes,
+        });
+        receipt = receiptFor(ctx, branch, draft, "Export recorded.", {
+          changedRanges: [],
+        });
+      } else if (command.type === "PlaceClip") {
+        const assetErr = assetCheck(draft, command.payload.assetId);
+        if (assetErr) throw Object.assign(new Error(assetErr.message), assetErr);
+        const item = buildPlacedItem(draft, branch, ctx, {
+          assetId: command.payload.assetId,
+          trackId: command.payload.trackId,
+          startMs: command.payload.startMs,
+          durationMs: command.payload.durationMs,
+          sourceInMs: command.payload.sourceInMs,
+          fit: command.payload.fit,
+          anchor: command.payload.anchor,
+          transitionIn: command.payload.transitionIn,
+          transitionOut: command.payload.transitionOut,
+          fadeMs: command.payload.fadeMs,
+        });
+        const changed = placeOnTrack(branch, item, command.payload.replaceExisting ?? false, true, "place_clip");
+        const operationId = ctx.id();
+        bump(branch, operationId);
+        const asset = draft.assets.find((entry) => entry.assetId === command.payload.assetId)!;
+        receipt = receiptFor(ctx, branch, draft, `Placed ${asset.label} on ${command.payload.trackId.toUpperCase()}.`, {
+          operationId,
+          changedRanges: changed,
+        });
+      } else if (command.type === "PlaceAudio") {
+        const assetErr = assetCheck(draft, command.payload.assetId);
+        if (assetErr) throw Object.assign(new Error(assetErr.message), assetErr);
+        if (!isValidRange(command.payload.range)) {
+          throw Object.assign(new Error("invalid range"), { code: "INVALID_RANGE" });
+        }
+        const item = buildPlacedItem(draft, branch, ctx, {
+          assetId: command.payload.assetId,
+          trackId: command.payload.trackId,
+          startMs: command.payload.range.startMs,
+          durationMs: rangeDuration(command.payload.range),
+          sourceInMs: command.payload.sourceInMs,
+          gain: command.payload.gain,
+          transitionIn: command.payload.transitionIn,
+          transitionOut: command.payload.transitionOut,
+          fadeMs: command.payload.fadeMs,
+        });
+        const changed = placeOnTrack(branch, item, command.payload.replaceExisting ?? false, true, "place_audio");
+        const operationId = ctx.id();
+        bump(branch, operationId);
+        const asset = draft.assets.find((entry) => entry.assetId === command.payload.assetId)!;
+        receipt = receiptFor(ctx, branch, draft, `Placed ${asset.label} on ${command.payload.trackId.toUpperCase()}.`, {
+          operationId,
+          changedRanges: changed,
+        });
+      } else if (command.type === "SetTransition") {
+        applyTransition(
+          branch,
+          command.payload.itemId,
+          command.payload.transitionIn,
+          command.payload.transitionOut,
+          command.payload.fadeMs,
+        );
+        const found = findItem(branch, command.payload.itemId)!;
+        const operationId = ctx.id();
+        bump(branch, operationId);
+        receipt = receiptFor(ctx, branch, draft, "Updated clip transition.", {
+          operationId,
+          changedRanges: [{ startMs: found.item.startMs, endMs: found.item.endMs, changes: ["set_transition"] }],
+        });
+      } else if (command.type === "SetGain") {
+        applyGain(branch, command.payload.itemId, command.payload.gain);
+        const found = findItem(branch, command.payload.itemId)!;
+        const operationId = ctx.id();
+        bump(branch, operationId);
+        receipt = receiptFor(ctx, branch, draft, `Set gain to ${command.payload.gain}.`, {
+          operationId,
+          changedRanges: [{ startMs: found.item.startMs, endMs: found.item.endMs, changes: ["set_gain"] }],
+        });
+      } else if (command.type === "MuteTrack") {
+        applyMute(branch, command.payload.trackId, command.payload.muted);
+        const operationId = ctx.id();
+        bump(branch, operationId);
+        receipt = receiptFor(
+          ctx,
+          branch,
+          draft,
+          command.payload.muted ? `Muted ${command.payload.trackId.toUpperCase()}.` : `Unmuted ${command.payload.trackId.toUpperCase()}.`,
+          { operationId, changedRanges: [{ startMs: 0, endMs: branch.durationMs, changes: ["mute_track"] }] },
+        );
+      } else {
+        throw Object.assign(new Error("unsupported"), { code: "UNSUPPORTED_OPERATION" });
+      }
+
+      if (command.type !== "AcceptBranch" && command.type !== "RecordExport") {
+        pushHistory(draft, branch.branchId, receipt.operationId, before, structuredClone(current(branch)));
+      }
+      pushEvent(draft, ctx, command, receipt);
+      (draft as EditorState & { __receipt?: Receipt }).__receipt = receipt;
+    });
+
+    const receipt = (next as EditorState & { __receipt?: Receipt }).__receipt;
+    if (!receipt) return fail({ code: "VALIDATION_ERROR", message: "No receipt" });
+    const clean = produce(next, (draft) => {
+      delete (draft as EditorState & { __receipt?: Receipt }).__receipt;
+    });
+    return { ok: true, state: clean, receipt };
+  } catch (error) {
+    const err = error as CommandError & Error;
+    return fail({
+      code: (err.code as CommandError["code"]) ?? "VALIDATION_ERROR",
+      message: err.message,
+      branchVersion: err.branchVersion,
+      lockId: err.lockId,
+      violations: err.violations,
+    });
+  }
+}
+
+export function createBusContext(seed = 0): BusContext {
+  let n = seed;
+  return {
+    now: () => 0,
+    id: () => `id_${String(++n).padStart(4, "0")}`,
+  };
+}

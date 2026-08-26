@@ -1,0 +1,210 @@
+import type { Asset, EditorState } from "../core/types";
+import { DEMO_TRANSCRIPT } from "./transcript";
+
+export const PROJECT_ID = "proj_kv_demo_v1";
+export const SOURCE_BRANCH_ID = "branch_source";
+export const DEMO_DURATION_MS = 74000;
+export const SCHEMA_VERSION = 1;
+
+export const WINNING_PROMPT =
+  "Turn this into a punchy 35-second vertical short for software engineers. Remove dead air and false starts, use the cleaner second take, cover the cache explanation with the GPU clip, hold the diagram long enough to understand it, and add bold captions. Create a new branch—do not touch locked ranges or export.";
+
+const assets: Asset[] = [
+  {
+    assetId: "take_1",
+    kind: "video",
+    label: "A-roll take 1",
+    uri: "/demo/take_1.mp4",
+    durationMs: 74000,
+    width: 1280,
+    height: 720,
+    checksum: "demo-take-1",
+    preparedTags: ["a-roll", "loose", "landscape"],
+    posterUri: "/demo/take_1.jpg",
+    safeRegions: [{ name: "face", x: 0.38, y: 0.08, width: 0.24, height: 0.72 }],
+  },
+  {
+    assetId: "take_2",
+    kind: "video",
+    label: "A-roll take 2",
+    uri: "/demo/take_2.mp4",
+    durationMs: 11000,
+    width: 1280,
+    height: 720,
+    checksum: "demo-take-2",
+    preparedTags: ["a-roll", "clean", "landscape"],
+    posterUri: "/demo/take_2.jpg",
+    safeRegions: [{ name: "face", x: 0.38, y: 0.08, width: 0.24, height: 0.72 }],
+  },
+  {
+    assetId: "gpu_rack",
+    kind: "video",
+    label: "GPU rack B-roll",
+    uri: "/demo/gpu_rack.mp4",
+    durationMs: 8000,
+    width: 1280,
+    height: 720,
+    checksum: "demo-gpu-rack",
+    preparedTags: ["b-roll", "gpu"],
+    posterUri: "/demo/gpu_rack.jpg",
+    safeRegions: [{ name: "safe_region", x: 0.25, y: 0.1, width: 0.5, height: 0.8 }],
+  },
+  {
+    assetId: "cache_diagram",
+    kind: "graphic",
+    label: "KV cache diagram",
+    uri: "/demo/cache_diagram.svg",
+    durationMs: 3000,
+    width: 1080,
+    height: 1920,
+    checksum: "demo-diagram",
+    preparedTags: ["diagram", "hold"],
+    posterUri: "/demo/cache_diagram.svg",
+  },
+  {
+    assetId: "brand_sting",
+    kind: "video",
+    label: "Brand sting",
+    uri: "/demo/brand_sting.mp4",
+    durationMs: 2000,
+    width: 1280,
+    height: 720,
+    checksum: "demo-sting",
+    preparedTags: ["sting"],
+    posterUri: "/demo/brand_sting.jpg",
+  },
+];
+
+export function createSeedState(now = 0): EditorState {
+  return {
+    project: {
+      projectId: PROJECT_ID,
+      title: "KV Cache Explainer",
+      schemaVersion: SCHEMA_VERSION,
+      createdAt: now,
+      activeBranchId: SOURCE_BRANCH_ID,
+      frameRate: 30,
+    },
+    assets,
+    transcript: DEMO_TRANSCRIPT,
+    branches: {
+      [SOURCE_BRANCH_ID]: {
+        branchId: SOURCE_BRANCH_ID,
+        name: "Source",
+        baseBranchId: null,
+        baseDigest: "",
+        branchVersion: 0,
+        operationIds: [],
+        status: "working",
+        durationMs: DEMO_DURATION_MS,
+        tracks: [
+          {
+            trackId: "v1",
+            kind: "video",
+            order: 0,
+            locked: false,
+            muted: false,
+            hidden: false,
+            items: [
+              {
+                itemId: "c_v1_take1",
+                assetId: "take_1",
+                trackId: "v1",
+                startMs: 0,
+                endMs: DEMO_DURATION_MS,
+                sourceInMs: 0,
+                sourceOutMs: DEMO_DURATION_MS,
+                label: "Take 1",
+              },
+            ],
+          },
+          {
+            trackId: "v2",
+            kind: "video_overlay",
+            order: 1,
+            locked: false,
+            muted: false,
+            hidden: false,
+            items: [],
+          },
+          {
+            trackId: "a1",
+            kind: "audio",
+            order: 2,
+            locked: false,
+            muted: false,
+            hidden: false,
+            items: [
+              {
+                itemId: "c_a1_take1",
+                assetId: "take_1",
+                trackId: "a1",
+                startMs: 0,
+                endMs: DEMO_DURATION_MS,
+                sourceInMs: 0,
+                sourceOutMs: DEMO_DURATION_MS,
+                label: "Take 1 audio",
+                gain: 1,
+              },
+            ],
+          },
+          {
+            trackId: "a2",
+            kind: "audio",
+            order: 3,
+            locked: false,
+            muted: false,
+            hidden: false,
+            items: [],
+          },
+          {
+            trackId: "cc",
+            kind: "caption",
+            order: 4,
+            locked: false,
+            muted: false,
+            hidden: false,
+            items: [],
+          },
+        ],
+        captions: [],
+        captionStyle: {
+          preset: "bold_center",
+          emphasis: "none",
+          maxLines: 2,
+          maxCharsPerLine: 42,
+        },
+        locks: [],
+        comments: [],
+        crop: {
+          aspectRatio: "16:9",
+          anchor: "center",
+          normalizedCenter: { x: 0.5, y: 0.5 },
+          scale: 1,
+        },
+      },
+    },
+    history: { [SOURCE_BRANCH_ID]: { undo: [], redo: [] } },
+    events: [],
+    exports: [],
+  };
+}
+
+export const SUPPORTED_OPERATIONS = [
+  "ripple_delete",
+  "replace_range",
+  "extend_still",
+  "split",
+  "trim",
+  "delete",
+  "move",
+  "place_clip",
+  "place_audio",
+  "set_transition",
+  "set_gain",
+  "mute_track",
+  "style_captions",
+  "place_broll",
+  "set_crop",
+  "import_media",
+] as const;
