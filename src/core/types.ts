@@ -35,6 +35,9 @@ export interface Asset {
   mime?: string;
   bytes?: number;
   imported?: boolean;
+  hasAudio?: boolean;
+  videoCodec?: string;
+  audioCodec?: string;
   safeRegions?: { name: string; x: number; y: number; width: number; height: number }[];
 }
 
@@ -336,6 +339,14 @@ export type EditOp =
 
 export type Command =
   | {
+      type: "ImportTranscript";
+      actor: Actor;
+      payload: {
+        label: string;
+        segments: TranscriptSegment[];
+      };
+    }
+  | {
       type: "CreateBranch";
       actor: Actor;
       payload: {
@@ -488,6 +499,9 @@ export type Command =
         bytes?: number;
         checksum: string;
         posterUri?: string;
+        hasAudio?: boolean;
+        videoCodec?: string;
+        audioCodec?: string;
       };
     }
   | {

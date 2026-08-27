@@ -99,6 +99,12 @@ export function digestProject(state: EditorState): string {
       checksum: asset.checksum,
       durationMs: asset.durationMs ?? null,
     })),
+    transcript: state.transcript.map((segment) => ({
+      segmentId: segment.segmentId,
+      startMs: segment.startMs,
+      endMs: segment.endMs,
+      text: segment.text,
+    })),
     branches: Object.keys(state.branches)
       .sort()
       .map((id) => ({

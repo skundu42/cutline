@@ -1,93 +1,159 @@
 # Cutline
 
-Agent-native browser video editor for the OpenAI WebMCP Challenge.
+**In-browser, agent-native, WebMCP-compatible video editing.**
 
-Edit at the speed of intent. Keep the human in control.
+Cutline is a local-first nonlinear video editor where a person and a WebMCP agent work on the same timeline. Import media, edit manually or through semantic tools, inspect every agent change, compare branches, and render the selected cut without uploading source files.
 
-Codex inspects, edits, and verifies a live timeline through page-native WebMCP tools. Locks, final acceptance, and export stay human-only.
+Built for the 2026 OpenAI WebMCP Challenge.
+
+## Why Cutline
+
+Traditional browser automation treats creative software as a collection of buttons and coordinates. Cutline exposes editing intent directly: inspect a project, create a safe branch, place or trim clips, style captions, compare cuts, and return a structured receipt. The visible editor remains the source of truth, so human and agent actions share one deterministic command path.
+
+Key capabilities:
+
+- Browser-local video, audio, image, and SRT/VTT import
+- V1/V2 video and A1/A2 audio tracks with direct timeline editing
+- Split, trim, move, crop, transitions, gain, mute, captions, and comments
+- Reversible working branches, version checks, state digests, undo, and redo
+- Inspectable WebMCP actions with bounded reads and idempotent writes
+- Human-only final selection and local rendering
+- OPFS media persistence with an IndexedDB fallback
+- 480p and 720p WebM rendering with Canvas, Web Audio, and MediaRecorder
 
 ## Quick start
 
+Requirements:
+
+- Node.js 20.9 or newer
+- npm
+- A Chromium-based browser for the most reliable local rendering
+
+From the repository root:
+
 ```bash
-npm install
-npm run demo:assets
+npm ci
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Add `?debug=1` to show the tool catalog and digests.
+Open [http://localhost:3000](http://localhost:3000). No environment variables, accounts, or cloud services are required. Add `?debug=1` to display the registered WebMCP tools and project diagnostics.
 
-Reset anytime with **Reset demo project**.
+To try the complete flow quickly, open the **Agent** panel and choose **Load the guided sample**.
 
-## Golden demo
+## Use with a WebMCP agent
 
-Bundled project: **KV Cache Explainer** (placeholder media with stable IDs `take_1`, `take_2`, `gpu_rack`, `cache_diagram`).
+1. Open Cutline in a WebMCP-capable browser.
+2. Wait for the header status to show **Agent connected**.
+3. Import local media or load the guided sample project.
+4. Ask the agent to inspect the project before editing.
+5. Review its branch, receipts, changed ranges, and preview before choosing a final cut.
 
-1. Play the messy 74s source.
-2. Paste the winning prompt into ChatGPT/Codex in the in-app browser, or click **Replay golden run**.
-3. Pin a comment, lock 18.0–19.2s (`L` or **Lock range**).
-4. Ask Codex to revise, or click **Replay lock-aware revision**.
-5. Compare A/B, accept, undo/redo, then **Export** (human-only).
+Example request:
 
-Winning prompt:
+> Inspect this project, create a new working branch, turn it into a punchy short, preserve protected ranges, and show me exactly what changed.
 
-> Turn this into a punchy 35-second vertical short for software engineers. Remove dead air and false starts, use the cleaner second take, cover the cache explanation with the GPU clip, hold the diagram long enough to understand it, and add bold captions. Create a new branch—do not touch locked ranges or export.
+Only `project_status` is available while the local project hydrates. The remaining tools are registered when the project is ready and removed if readiness is lost.
 
-## WebMCP tools
+### Semantic tool surface
 
-Registered through the current `document.modelContext.registerTool()` API. Only `project_status` is registered during hydration; the operational catalog is added once the project is ready and removed if readiness is lost. Registrations include titles, JSON Schema inputs, cancellation-aware execution, safety annotations, idempotent write retries, bounded reads, and visible lifecycle status.
-
-| Tool | Side effect |
+| Tools | Purpose |
 |---|---|
-| `project_status` | none |
-| `inspect_project` | none |
-| `get_timeline` | none |
-| `read_transcript` | none |
-| `get_comments` | none |
-| `select_branch` | visible branch selection |
-| `control_playback` | play, pause, or seek the shared viewer |
-| `add_comment` | agent-attributed timeline comment |
-| `propose_comment_resolution` | non-destructive resolution proposal |
-| `create_cut_branch` | working branch |
-| `apply_edit_batch` | atomic timeline mutation |
-| `style_captions` | caption cues |
-| `place_broll` | V2 overlay |
-| `place_clip` | V1/V2 clip at a time |
-| `place_audio` | A1 dialogue or A2 music/SFX |
-| `set_transition` | cut / crossfade / fade in-out / dissolve |
-| `split_clip` | razor at a time |
-| `trim_clip` | in/out points |
-| `set_gain` | clip volume 0–2 |
-| `mute_track` | mute/unmute a track |
-| `delete_clip` | remove without ripple |
-| `import_media` | add https or demo media to the bin (≤500 MB) |
-| `set_crop` | aspect / framing |
-| `preview_range` | seek/play, no edit |
-| `compare_cuts` | compare target, no edit |
-| `undo_edit` | undo the latest branch edit group |
-| `redo_edit` | redo the latest branch edit group |
+| `project_status`, `inspect_project` | Check readiness, capabilities, assets, branches, tracks, and locks |
+| `get_timeline`, `read_transcript`, `get_comments` | Read bounded editing context |
+| `select_branch`, `control_playback` | Control the shared visible workspace |
+| `import_media` | Register browser-local or same-origin media without uploading it |
+| `create_cut_branch` | Create a reversible working branch from an explicit version |
+| `apply_edit_batch` | Apply up to 40 atomic semantic timeline operations |
+| `place_clip`, `place_broll`, `place_audio` | Build picture, overlay, and sound tracks |
+| `split_clip`, `trim_clip`, `delete_clip` | Refine timeline clips |
+| `set_crop`, `set_transition`, `set_gain`, `mute_track` | Adjust presentation and sound |
+| `style_captions` | Generate styled cues from the attached transcript |
+| `add_comment`, `propose_comment_resolution` | Collaborate without impersonating or deleting human notes |
+| `preview_range`, `compare_cuts` | Verify a digest-bound range and compare branch structure |
+| `undo_edit`, `redo_edit` | Reverse or restore working-branch edits |
 
-Not registered (trust boundary): lock/unlock, accept, export, publish, delete.
+### Human-control boundaries
 
-Every branch write requires the latest `expectedBranchVersion`. Reusing a `clientRequestId` returns the original result instead of repeating a write. Once a human accepts a branch it becomes immutable; further work must start on a new working branch. `preview_range` verifies through the shared live viewer and does not claim to render a separate artifact.
+Agents can operate only on media already available to the browser. They cannot:
+
+- accept a branch as the final cut;
+- render, download, upload, or publish media;
+- delete the local project;
+- remove or impersonate human comments; or
+- silently overwrite a stale or accepted branch.
+
+Mutations require the latest branch version, support idempotent request IDs, respect protected ranges, and return a receipt containing the new version, state digest, changed ranges, duration delta, and warnings.
+
+## Local media workflow
+
+Cutline accepts MP4/WebM video, MP3/MP4/WAV/WebM audio, PNG/JPEG/WebP/SVG images, and SRT/VTT transcripts. Media imports are limited to 500 MB per file.
+
+Source media is written to the browser's Origin Private File System when available, with IndexedDB as the compatibility fallback. Dexie stores project snapshots, comments, history, and media metadata. Mediabunny inspects duration, dimensions, codecs, and audio tracks in a dedicated worker through Comlink. The application Content Security Policy restricts media and network access to same-origin and browser-local blob sources.
+
+Rendering is entirely local and composites V1/V2, crop settings, fades, captions, track mute state, and gain. It currently runs in real time, so a 30-second timeline takes approximately 30 seconds to render.
 
 ## Architecture
 
-Direct manipulation and WebMCP share one command bus (`src/core`). State is local-first in IndexedDB, including uploaded media blobs. Tracks: V1, V2, A1, A2, CC. Accepted branches are read-only. Export uses a cached 720p artifact after the Day 1 media gate; live MediaRecorder is not required for the demo.
+```text
+Human UI ---------+
+                  +--> shared editor store --> deterministic reducer --> receipts/digests
+WebMCP tools -----+             |                        |
+                                |                        +--> undo/redo + invariants
+                                +--> Dexie metadata/history
+                                +--> OPFS or IndexedDB media
+                                +--> local preview/render pipeline
+```
 
-## Tests
+| Directory | Responsibility |
+|---|---|
+| `src/core` | Commands, types, timeline invariants, imports, versioning, and digests |
+| `src/store` | Shared UI/WebMCP state and local workflow orchestration |
+| `src/persistence` | IndexedDB project snapshots and persisted media fallback |
+| `src/media` | Media inspection worker, local media access, and browser-native rendering |
+| `src/webmcp` | Schemas and dynamically registered semantic editing tools |
+| `src/ui` | Direct-manipulation editor, review surfaces, and render flow |
+| `e2e` | Browser-level editing and WebMCP registration coverage |
+
+## Development commands
+
+| Command | Purpose |
+|---|---|
+| `npm run dev` | Start the local Next.js development server |
+| `npm test` | Run the Vitest unit and integration suite |
+| `npm run test:watch` | Run Vitest in watch mode |
+| `npm run lint` | Run ESLint |
+| `npm run build` | Create a production build |
+| `npm run start` | Serve the production build |
+| `npm run e2e` | Run Playwright end-to-end tests |
+| `npm run demo:assets` | Regenerate the local demo fixtures |
+
+Install the Playwright browser once before running E2E tests:
+
+```bash
+npx playwright install chromium
+```
+
+Run the full pre-push validation:
 
 ```bash
 npm test
-npx playwright install chromium
+npm run lint
+npm run build
 npm run e2e
 ```
 
-## Deploy
+## Deployment
 
-```bash
-npx vercel --yes
-```
+Cutline is a standard Next.js application and includes `vercel.json` for automatic framework detection. It has no server-side media pipeline and requires no secrets. After deployment, verify the site in the WebMCP browser used by your agent and confirm that the connection status changes from **Agent offline** to **Agent connected**.
 
-## License
+## Privacy and current limitations
 
-MIT. Demo placeholders are original generated color bars, not third-party footage. Replace files in `public/demo/` using the same asset IDs to drop in real media.
+- Project data is scoped to the current browser origin and may be cleared by browser storage controls.
+- Request persistent storage from the Project menu when the browser offers it.
+- Local render output depends on the codecs exposed by `MediaRecorder`; Chromium currently provides the most consistent WebM support.
+- Rendering happens in the active tab and should not be interrupted.
+- Cutline is an editing prototype, not a lossless professional finishing pipeline.
+
+## License and attribution
+
+Cutline is available under the [MIT License](LICENSE). Demo media under `public/demo/` is original generated test-fixture material; see [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).

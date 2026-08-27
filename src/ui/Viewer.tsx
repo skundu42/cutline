@@ -40,6 +40,9 @@ export function Viewer() {
   const setPlayhead = useEditorStore((s) => s.setPlayhead);
   const setPlaying = useEditorStore((s) => s.setPlaying);
   const setPlaybackEndMs = useEditorStore((s) => s.setPlaybackEndMs);
+  const importFiles = useEditorStore((s) => s.importFiles);
+  const loadSampleProject = useEditorStore((s) => s.loadSampleProject);
+  const dispatch = useEditorStore((s) => s.dispatch);
   const compare = useEditorStore((s) => s.compare);
   const comparedBranchId = compare.show === "right" ? compare.rightId : compare.leftId;
   const branch = compare.enabled && comparedBranchId ? editor.branches[comparedBranchId] ?? activeBranch(editor) : activeBranch(editor);
@@ -96,9 +99,28 @@ export function Viewer() {
 
   const aspect = branch.crop.aspectRatio === "9:16" ? "aspect-[9/16]" : branch.crop.aspectRatio === "1:1" ? "aspect-square" : "aspect-video";
   const objectPos = `${branch.crop.normalizedCenter.x * 100}% ${branch.crop.normalizedCenter.y * 100}%`;
+  const v1Asset = v1Clip ? asset(v1Clip.assetId) : null;
+  const v1IsStill = v1Asset?.kind === "graphic" || v1Asset?.kind === "image";
   const v2Asset = v2Clip ? asset(v2Clip.assetId) : null;
   const isGraphic = v2Asset?.kind === "graphic" || v2Asset?.kind === "image";
   const overlayOpacity = v2Clip ? 0.9 * envelope(v2Clip, playheadMs) : 0;
+  const firstVisualAsset = editor.assets.find((item) => item.kind !== "audio");
+  const addFirstVisual = () => {
+    if (!firstVisualAsset) return;
+    dispatch({
+      type: "PlaceClip",
+      actor: { type: "human", surface: "ui" },
+      payload: {
+        branchId: branch.branchId,
+        expectedBranchVersion: branch.branchVersion,
+        assetId: firstVisualAsset.assetId,
+        trackId: "v1",
+        startMs: branch.durationMs,
+        durationMs: firstVisualAsset.durationMs ?? 3000,
+        fit: "cover",
+      },
+    });
+  };
 
   return (
     <section className="viewer-shell" aria-label="Program monitor">
@@ -109,9 +131,26 @@ export function Viewer() {
       </div>
       <div className="viewer-stage">
         <div className={`program-frame ${aspect}`}>
-          {v1Clip ? (
-            <video ref={v1} src={asset(v1Clip.assetId)?.uri} className="program-media" style={{ objectPosition: objectPos, opacity: envelope(v1Clip, playheadMs) }} muted playsInline />
-          ) : <div className="no-clip"><span>No media at playhead</span><small>Add a clip or move to an occupied range.</small></div>}
+          {v1Clip && v1Asset && !v1IsStill ? (
+            <video ref={v1} src={v1Asset.uri} className="program-media" style={{ objectPosition: objectPos, opacity: envelope(v1Clip, playheadMs) }} muted playsInline />
+          ) : null}
+          {v1Clip && v1Asset && v1IsStill ? (
+            // Local blob URLs bypass the Next image optimizer by design.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={v1Asset.uri} alt={v1Asset.label} className={`program-media ${v1Clip.fit === "contain" ? "contain" : ""}`} style={{ objectPosition: objectPos, opacity: envelope(v1Clip, playheadMs) }} />
+          ) : null}
+          {!v1Clip ? (
+            <div className={`no-clip ${editor.assets.length ? "" : "is-onboarding"}`}>
+              <span>{editor.assets.length ? "No picture at playhead" : "Make your first cut"}</span>
+              <small>{editor.assets.length ? "Move to an occupied range or add media to the timeline." : "Import a clip to begin. Your media stays in this browser."}</small>
+              {editor.assets.length === 0 ? (
+                <div className="viewer-empty-actions">
+                  <label className="viewer-import-button"><span>Import media</span><input data-testid="viewer-upload-media" className="sr-only" type="file" multiple accept="video/mp4,video/webm,audio/mpeg,audio/mp4,audio/wav,audio/webm,image/png,image/jpeg,image/webp,image/svg+xml" onChange={(event) => { const files = Array.from(event.target.files ?? []); if (files.length) void importFiles(files); event.target.value = ""; }} /></label>
+                  <button type="button" onClick={() => void loadSampleProject()}>Try the sample</button>
+                </div>
+              ) : firstVisualAsset && branch.durationMs === 0 ? <button className="viewer-next-step" type="button" onClick={addFirstVisual}>Add {firstVisualAsset.label} to timeline</button> : null}
+            </div>
+          ) : null}
           {v2Clip && v2Asset && !isGraphic ? <video ref={v2} src={v2Asset.uri} className="program-media overlay-media" style={{ opacity: overlayOpacity }} muted playsInline /> : null}
           {v2Clip && v2Asset && isGraphic ? (
             // Dynamic editor assets may be blob URLs, which cannot use next/image's optimizer.

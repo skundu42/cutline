@@ -21,7 +21,7 @@ import type {
   Warning,
 } from "./types";
 
-const HUMAN_ONLY: Command["type"][] = ["SetLock", "AcceptBranch", "RecordExport", "ResetProject"];
+const HUMAN_ONLY: Command["type"][] = ["ImportTranscript", "SetLock", "AcceptBranch", "RecordExport", "ResetProject"];
 const BRANCH_WRITES: Command["type"][] = [
   "ApplyEditBatch",
   "StyleCaptions",
@@ -549,6 +549,14 @@ function applyOp(
     if (endMs <= startMs) {
       throw Object.assign(new Error("invalid trim"), { code: "INVALID_RANGE" satisfies CommandError["code"] });
     }
+    const trimChanged = {
+      startMs: Math.min(found.item.startMs, startMs),
+      endMs: Math.max(found.item.endMs, endMs),
+    };
+    const trimLock = lockHits(branch, [trimChanged]);
+    if (trimLock) {
+      throw Object.assign(new Error("locked range"), { code: "LOCKED_RANGE" satisfies CommandError["code"], lockId: trimLock.lockId });
+    }
     const deltaIn = startMs - found.item.startMs;
     const deltaOut = found.item.endMs - endMs;
     found.item.startMs = startMs;
@@ -583,6 +591,14 @@ function applyOp(
       throw Object.assign(new Error("unknown item"), { code: "INVARIANT_VIOLATION" satisfies CommandError["code"] });
     }
     const dur = found.item.endMs - found.item.startMs;
+    const moveChanged = {
+      startMs: Math.min(found.item.startMs, op.startMs),
+      endMs: Math.max(found.item.endMs, op.startMs + dur),
+    };
+    const moveLock = lockHits(branch, [moveChanged]);
+    if (moveLock) {
+      throw Object.assign(new Error("locked range"), { code: "LOCKED_RANGE" satisfies CommandError["code"], lockId: moveLock.lockId });
+    }
     found.item.startMs = op.startMs;
     found.item.endMs = op.startMs + dur;
     found.track.items.sort((a, b) => a.startMs - b.startMs);
@@ -600,7 +616,20 @@ function applyOp(
       durationMs: op.durationMs,
       sourceInMs: op.sourceInMs,
     });
-    return { changed: placeOnTrack(branch, item, false, required, "place_clip") };
+    const changed = placeOnTrack(branch, item, false, required, "place_clip");
+    const asset = state.assets.find((candidate) => candidate.assetId === op.assetId);
+    if (changed.length && op.trackId === "v1" && asset?.kind === "video" && asset.hasAudio !== false) {
+      const audioItem = buildPlacedItem(state, branch, ctx, {
+        assetId: op.assetId,
+        trackId: "a1",
+        startMs: op.startMs,
+        durationMs: item.endMs - item.startMs,
+        sourceInMs: op.sourceInMs,
+        gain: 1,
+      });
+      changed.push(...placeOnTrack(branch, audioItem, false, required, "place_linked_audio"));
+    }
+    return { changed };
   }
 
   if (op.op === "place_audio") {
@@ -639,19 +668,10 @@ function applyOp(
 
 function mapTranscript(state: EditorState, branch: Branch) {
   const v1 = branch.tracks.find((t) => t.trackId === "v1");
-  if (!v1) return state.transcript;
+  if (!v1?.items.length) return state.transcript;
   return state.transcript.flatMap((segment) => {
     const mappedWords = (segment.words ?? []).flatMap((word) => {
-      const clip = v1.items.find(
-        (item) => word.startMs >= item.sourceInMs && word.startMs < item.sourceOutMs && item.assetId === "take_1",
-      );
-      const take2 = v1.items.find(
-        (item) =>
-          item.assetId === "take_2" &&
-          word.startMs >= item.sourceInMs &&
-          word.startMs < item.sourceOutMs,
-      );
-      const hit = clip ?? take2;
+      const hit = v1.items.find((item) => word.startMs >= item.sourceInMs && word.startMs < item.sourceOutMs);
       if (!hit) return [];
       const startMs = hit.startMs + (word.startMs - hit.sourceInMs);
       const endMs = hit.startMs + (word.endMs - hit.sourceInMs);
@@ -723,6 +743,9 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
           mime: command.payload.mime,
           bytes: command.payload.bytes,
           imported: true,
+          hasAudio: command.payload.hasAudio,
+          videoCodec: command.payload.videoCodec,
+          audioCodec: command.payload.audioCodec,
         });
         const receipt: Receipt = {
           operationId: ctx.id(),
@@ -730,6 +753,35 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
           stateDigest: digestProject(draft),
           changedRanges: [],
           warnings: [],
+        };
+        pushEvent(draft, ctx, command, receipt);
+        (draft as EditorState & { __receipt?: Receipt }).__receipt = receipt;
+        return;
+      }
+
+      if (command.type === "ImportTranscript") {
+        if (!command.payload.segments.length || command.payload.segments.length > 10_000) {
+          throw Object.assign(new Error("Transcript must contain between 1 and 10,000 timed cues"), { code: "VALIDATION_ERROR" });
+        }
+        const previousCount = draft.transcript.length;
+        draft.transcript = structuredClone(command.payload.segments);
+        let clearedCaptionCount = 0;
+        for (const branch of Object.values(draft.branches)) {
+          if (!branch.captions.length) continue;
+          clearedCaptionCount += branch.captions.length;
+          branch.captions = [];
+          bump(branch, ctx.id());
+        }
+        const receipt: Receipt = {
+          operationId: ctx.id(),
+          summary: `Attached ${command.payload.segments.length} transcript cues from ${command.payload.label}.`,
+          stateDigest: digestProject(draft),
+          changedRanges: [],
+          warnings: clearedCaptionCount
+            ? [{ code: "CAPTIONS_RESET", message: `Cleared ${clearedCaptionCount} caption cues so they can be regenerated from the new transcript.` }]
+            : previousCount
+              ? [{ code: "TRANSCRIPT_REPLACED", message: `Replaced ${previousCount} existing transcript cues.` }]
+              : [],
         };
         pushEvent(draft, ctx, command, receipt);
         (draft as EditorState & { __receipt?: Receipt }).__receipt = receipt;
@@ -961,8 +1013,12 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
           if (command.payload.normalizedCenter) branch.crop.normalizedCenter = command.payload.normalizedCenter;
           if (command.payload.scale) branch.crop.scale = command.payload.scale;
           if (branch.crop.anchor === "face" || branch.crop.anchor === "safe_region") {
-            const take = draft.assets.find((a) => a.assetId === "take_1");
-            const region = take?.safeRegions?.[0];
+            const primaryClip = branch.tracks.find((track) => track.trackId === "v1")?.items[0];
+            const primaryAsset = primaryClip
+              ? draft.assets.find((asset) => asset.assetId === primaryClip.assetId)
+              : undefined;
+            const region = primaryAsset?.safeRegions?.find((candidate) => candidate.name === branch.crop.anchor)
+              ?? primaryAsset?.safeRegions?.[0];
             if (region) {
               branch.crop.normalizedCenter = {
                 x: region.x + region.width / 2,
@@ -1047,9 +1103,6 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
         const operationId = ctx.id();
         receipt = receiptFor(ctx, branch, draft, `Selected ${branch.name} as the final cut.`, { operationId });
       } else if (command.type === "RecordExport") {
-        if (draft.project.selectedFinalBranchId !== branch.branchId) {
-          throw Object.assign(new Error("accept first"), { code: "VALIDATION_ERROR" });
-        }
         draft.exports.push({
           exportId: ctx.id(),
           branchId: branch.branchId,
@@ -1079,11 +1132,26 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
           transitionOut: command.payload.transitionOut,
           fadeMs: command.payload.fadeMs,
         });
-        const changed = placeOnTrack(branch, item, command.payload.replaceExisting ?? false, true, "place_clip");
+        const replaceExisting = command.payload.replaceExisting ?? false;
+        const changed = placeOnTrack(branch, item, replaceExisting, true, "place_clip");
+        const asset = draft.assets.find((entry) => entry.assetId === command.payload.assetId)!;
+        if (command.payload.trackId === "v1" && asset.kind === "video" && asset.hasAudio !== false) {
+          const audioItem = buildPlacedItem(draft, branch, ctx, {
+            assetId: command.payload.assetId,
+            trackId: "a1",
+            startMs: command.payload.startMs,
+            durationMs: item.endMs - item.startMs,
+            sourceInMs: command.payload.sourceInMs,
+            gain: 1,
+            transitionIn: command.payload.transitionIn,
+            transitionOut: command.payload.transitionOut,
+            fadeMs: command.payload.fadeMs,
+          });
+          changed.push(...placeOnTrack(branch, audioItem, replaceExisting, true, "place_linked_audio"));
+        }
         const operationId = ctx.id();
         bump(branch, operationId);
-        const asset = draft.assets.find((entry) => entry.assetId === command.payload.assetId)!;
-        receipt = receiptFor(ctx, branch, draft, `Placed ${asset.label} on ${command.payload.trackId.toUpperCase()}.`, {
+        receipt = receiptFor(ctx, branch, draft, `Placed ${asset.label} on ${command.payload.trackId.toUpperCase()}${command.payload.trackId === "v1" && asset.kind === "video" && asset.hasAudio !== false ? " with linked audio" : ""}.`, {
           operationId,
           changedRanges: changed,
         });

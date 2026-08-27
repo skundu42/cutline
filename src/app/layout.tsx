@@ -19,7 +19,7 @@ const archivo = Archivo({
 
 export const metadata: Metadata = {
   title: "Cutline — agent-native video editor",
-  description: "Edit at the speed of intent. Keep the human in control.",
+  description: "A local-first browser video editor that people and Codex can control together.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

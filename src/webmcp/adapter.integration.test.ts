@@ -8,6 +8,8 @@ vi.mock("@/persistence/db", () => ({
   loadEditor: vi.fn(async () => null),
   persistEditor: vi.fn(async () => undefined),
   putMediaBlob: vi.fn(async () => undefined),
+  registerLiveAssetUrl: vi.fn(),
+  getLocalStorageBackend: vi.fn(() => "indexeddb"),
 }));
 vi.mock("@/telemetry", () => ({ track: vi.fn() }));
 
@@ -92,6 +94,8 @@ describe("WebMCP registered handlers", () => {
     await expect(tools.get("project_status")!.execute({ projectId: "proj_kv_demo_v1" })).resolves.toMatchObject({
       ready: true,
       readyAt: 150,
+      processing: { localOnly: true, mediaEngine: "mediabunny" },
+      storageBackend: "indexeddb",
     });
     await expect(timeline.execute({ projectId: "wrong", branchId: SOURCE_BRANCH_ID })).resolves.toMatchObject({
       error: { code: "PROJECT_NOT_FOUND" },
@@ -132,6 +136,7 @@ describe("WebMCP registered handlers", () => {
     expect(inspect).toHaveProperty("tracks");
     expect(inspect).not.toHaveProperty("assets");
     expect(inspect).not.toHaveProperty("locks");
+    expect(inspect).toHaveProperty("capabilities.processing.localOnly", true);
     expect(tools.get("inspect_project")!.annotations).toMatchObject({ readOnlyHint: true, untrustedContentHint: true });
 
     const timeline = await tools.get("get_timeline")!.execute({

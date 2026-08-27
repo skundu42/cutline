@@ -1,3 +1,5 @@
+> Historical challenge brief: this document preserves the original demo-led plan. The current application starts with an empty local project, accepts user-owned media, and renders the active timeline entirely in the browser. See the README for the current product contract.
+
 OPENAI WEBMCP CHALLENGE  •  BUILD-READY SPECIFICATION
 CUTLINE Agent-Native Browser Video Editor
 Edit at the speed of intent. Keep the human in control.

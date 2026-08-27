@@ -1,8 +1,9 @@
 "use client";
 
 import { digestBranch, formatTimecode } from "@/core";
+import { getRenderSize, selectRenderMimeType, type RenderPreset } from "@/media/export";
 import { activeBranch, useEditorStore } from "@/store/editorStore";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 function CloseIcon() {
   return <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m6 6 12 12M18 6 6 18" /></svg>;
@@ -12,14 +13,30 @@ function DownloadIcon() {
   return <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 3v12m-5-5 5 5 5-5M5 20h14" /></svg>;
 }
 
+function RenderIcon() {
+  return <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m8 5 11 7-11 7V5Z"/><path d="M3 3h18v18H3z"/></svg>;
+}
+
+function formatBytes(bytes: number | null) {
+  if (bytes == null) return "—";
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export function ExportModal() {
-  const open = useEditorStore((s) => s.exportOpen);
-  const setExportOpen = useEditorStore((s) => s.setExportOpen);
-  const editor = useEditorStore((s) => s.editor);
-  const dispatch = useEditorStore((s) => s.dispatch);
+  const open = useEditorStore((state) => state.exportOpen);
+  const setExportOpen = useEditorStore((state) => state.setExportOpen);
+  const editor = useEditorStore((state) => state.editor);
+  const renderState = useEditorStore((state) => state.renderState);
+  const renderExport = useEditorStore((state) => state.renderExport);
+  const cancelRender = useEditorStore((state) => state.cancelRender);
   const branch = activeBranch(editor);
-  const accepted = editor.project.selectedFinalBranchId;
-  const ready = accepted === branch.branchId;
+  const [preset, setPreset] = useState<RenderPreset>("720p");
+  const renderSupported = typeof MediaRecorder === "undefined" ? null : Boolean(selectRenderMimeType());
+  const output = renderState.status === "ready" && renderState.width && renderState.height
+    ? { width: renderState.width, height: renderState.height }
+    : getRenderSize(branch.crop.aspectRatio, preset);
+  const rendering = renderState.status === "preparing" || renderState.status === "rendering";
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
@@ -59,36 +76,50 @@ export function ExportModal() {
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setExportOpen(false); }}>
       <section ref={dialogRef} className="export-modal" role="dialog" aria-modal="true" aria-labelledby="export-title" aria-describedby="export-description">
         <header className="export-heading">
-          <div><span>Final delivery</span><h2 id="export-title">Export your cut</h2></div>
-          <button ref={closeRef} className="icon-button" onClick={() => setExportOpen(false)} aria-label="Close export dialog"><CloseIcon /></button>
+          <div><span>Local delivery</span><h2 id="export-title">Render your cut</h2></div>
+          <button ref={closeRef} className="icon-button" onClick={() => setExportOpen(false)} aria-label="Close render dialog"><CloseIcon /></button>
         </header>
 
-        <div className="human-gate"><span aria-hidden="true">H</span><div><strong>Human approval required</strong><p id="export-description">Only you can export. Agents can prepare and preview cuts, but final delivery stays in your control.</p></div></div>
+        <div className="human-gate"><span aria-hidden="true">L</span><div><strong>Rendered entirely on this device</strong><p id="export-description">Cutline composites the current timeline in your browser. Original clips and the finished file are never uploaded.</p></div></div>
 
         <div className="export-summary">
           <div className="export-preview"><div className={`export-frame ratio-${branch.crop.aspectRatio.replace(":", "-")}`}><span>720p</span><small>{branch.crop.aspectRatio}</small></div></div>
           <dl>
             <div><dt>Branch</dt><dd>{branch.name}</dd></div>
             <div><dt>Duration</dt><dd>{formatTimecode(branch.durationMs)}</dd></div>
-            <div><dt>Resolution</dt><dd>720 × 1280</dd></div>
-            <div><dt>Format</dt><dd>MP4 · H.264</dd></div>
+            <div><dt>Resolution</dt><dd>{output.width} × {output.height}</dd></div>
+            <div><dt>Format</dt><dd>WebM · browser native</dd></div>
+            <div><dt>Estimated time</dt><dd>About {Math.max(1, Math.ceil(branch.durationMs / 1000))} sec</dd></div>
+            {renderState.status === "ready" ? <div><dt>File size</dt><dd>{formatBytes(renderState.bytes)}</dd></div> : null}
             <div className="digest-row"><dt>State digest</dt><dd title={digestBranch(branch)}>{digestBranch(branch).slice(0, 22)}…</dd></div>
           </dl>
         </div>
 
-        {!accepted ? <div className="export-notice" role="status">Accept a branch in Compare before exporting.</div> : !ready ? <div className="export-notice" role="status">Switch to the accepted branch to export it.</div> : null}
+        <label className="render-preset"><span>Output quality</span><select value={preset} disabled={rendering || renderState.status === "ready"} onChange={(event) => setPreset(event.target.value as RenderPreset)}><option value="720p">720p · best quality</option><option value="480p">480p · smaller file</option></select></label>
+        {renderSupported === false ? <div className="export-notice" role="alert">This browser cannot create a local WebM video. Use a current Chromium-based browser.</div> : null}
+
+        {rendering ? (
+          <div className="render-progress" role="status" aria-live="polite">
+            <div><span>{renderState.status === "preparing" ? "Preparing local media" : "Rendering in real time"}</span><strong>{Math.round(renderState.progress * 100)}%</strong></div>
+            <progress max={1} value={renderState.progress} />
+            <p>Keep this tab open. Rendering takes about as long as the cut.</p>
+          </div>
+        ) : null}
+        {renderState.status === "ready" ? <div className="render-ready" role="status"><span>Render complete</span><p>The download matches the current timeline digest.</p></div> : null}
+        {renderState.status === "failed" ? <div className="export-notice" role="alert">{renderState.error}</div> : null}
+        {renderState.status === "cancelled" ? <div className="export-notice" role="status">Render cancelled. Your timeline was not changed.</div> : null}
 
         <footer className="export-footer">
-          <button className="secondary-button" onClick={() => setExportOpen(false)}>Cancel</button>
-          {ready ? (
-            <a
-              data-testid="download-export"
-              className="primary-button"
-              href="/demo/golden_export_720p.mp4"
-              download={`cutline-${branch.branchId}.mp4`}
-              onClick={() => dispatch({ type: "RecordExport", actor: { type: "human", surface: "ui" }, payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, uri: "/demo/golden_export_720p.mp4", width: 720, height: 1280 } })}
-            ><DownloadIcon /> Download MP4</a>
-          ) : <button className="primary-button" disabled><DownloadIcon /> Download MP4</button>}
+          {rendering ? (
+            <button className="secondary-button" onClick={cancelRender}>Cancel render</button>
+          ) : (
+            <button className="secondary-button" onClick={() => setExportOpen(false)}>Close</button>
+          )}
+          {renderState.status === "ready" && renderState.downloadUrl && renderState.filename ? (
+            <a data-testid="download-export" className="primary-button" href={renderState.downloadUrl} download={renderState.filename}><DownloadIcon /> Download video</a>
+          ) : (
+            <button data-testid="render-export" className="primary-button" disabled={rendering || branch.durationMs === 0 || renderSupported === false} onClick={() => void renderExport(preset)}><RenderIcon /> {renderState.status === "failed" || renderState.status === "cancelled" ? "Render again" : `Render ${preset}`}</button>
+          )}
         </footer>
       </section>
     </div>

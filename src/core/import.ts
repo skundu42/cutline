@@ -27,14 +27,13 @@ export function kindFromMime(mime: string): "video" | "audio" | "image" | "graph
 
 export function validateImportUri(uri: string): CommandError | null {
   if (
-    uri.startsWith("https://") ||
-    uri.startsWith("/demo/") ||
+    uri.startsWith("/") ||
     uri.startsWith("blob:") ||
     uri.startsWith("idb:")
   ) {
     return null;
   }
-  return { code: "VALIDATION_ERROR", message: "Import URI must be https, a demo path, or a local blob" };
+  return { code: "VALIDATION_ERROR", message: "Media must be a browser-local blob or a same-origin path" };
 }
 
 export function validateImport(payload: {

@@ -1,10 +1,12 @@
 import { compareBranches, digestBranch, readMappedTranscript } from "@/core";
-import { PROJECT_ID, SUPPORTED_OPERATIONS } from "@/demo/manifest";
+import { SUPPORTED_OPERATIONS } from "@/core/project";
 import { useEditorStore, activeBranch } from "@/store/editorStore";
 import type { InputSchema, ModelContext, WebMcpToolAnnotations } from "@mcp-b/webmcp-types";
 import { useEffect } from "react";
 import { ZodError } from "zod";
 import { HUMAN_ONLY_ABSENT, P0_TOOL_NAMES } from "./catalog";
+import { getLocalMediaCapabilities } from "@/media/localMedia";
+import { getLocalStorageBackend } from "@/persistence/db";
 import {
   AddCommentInput,
   ApplyEditBatchInput,
@@ -148,6 +150,8 @@ export async function registerAll(controller: AbortController, scope: Registrati
         ready,
         readyAt: ready ? readyAt : null,
         activeBranchId: editor.project.activeBranchId,
+        processing: getLocalMediaCapabilities(),
+        storageBackend: getLocalStorageBackend(),
       };
     },
     { readOnlyHint: true },
@@ -181,7 +185,9 @@ export async function registerAll(controller: AbortController, scope: Registrati
           dimensions: asset.width && asset.height ? { width: asset.width, height: asset.height } : undefined,
           preparedTags: asset.preparedTags,
           imported: asset.imported ?? false,
-          uri: asset.uri.startsWith("blob:") || asset.uri.startsWith("idb:") ? undefined : asset.uri,
+          hasAudio: asset.hasAudio,
+          codecs: asset.videoCodec || asset.audioCodec ? { video: asset.videoCodec, audio: asset.audioCodec } : undefined,
+          uri: asset.uri.startsWith("blob:") || asset.uri.startsWith("idb:") || asset.uri.startsWith("local:") ? undefined : asset.uri,
         })) } : {}),
         ...(include.has("branches") ? { branches: Object.values(editor.branches).map((item) => ({
           branchId: item.branchId,
@@ -214,6 +220,8 @@ export async function registerAll(controller: AbortController, scope: Registrati
           exportPresets: ["720p"],
           humanOnly: HUMAN_ONLY_ABSENT,
           importLimitBytes: 500 * 1024 * 1024,
+          processing: getLocalMediaCapabilities(),
+          storageBackend: getLocalStorageBackend(),
         },
         truncated: { assets: include.has("assets") && editor.assets.length > 200 },
       };
@@ -529,7 +537,7 @@ export async function registerAll(controller: AbortController, scope: Registrati
   await register(
     "import_media",
     "Import media",
-    "Add a clip, still, or audio file to the project bin from an https URL or a demo path. Does not place it on the timeline. After import, call place_clip or place_audio. Max 500 MB. Does not export.",
+    "Register a browser-local blob or same-origin media path in the project bin. Does not upload, place media on the timeline, or export. After import, call place_clip or place_audio. Max 500 MB.",
     jsonSchema(ImportMediaInput),
     (input) => {
       const parsed = ImportMediaInput.parse(input);
@@ -546,6 +554,9 @@ export async function registerAll(controller: AbortController, scope: Registrati
           mime: parsed.mime,
           bytes: parsed.bytes,
           checksum: parsed.checksum ?? `import-${parsed.uri}`,
+          hasAudio: parsed.hasAudio,
+          videoCodec: parsed.videoCodec,
+          audioCodec: parsed.audioCodec,
         },
       });
       if (!result.ok) return toolError(result.error.code, result.error.message);
@@ -928,5 +939,3 @@ export function WebMcpBridge() {
   }, []);
   return null;
 }
-
-export { PROJECT_ID };

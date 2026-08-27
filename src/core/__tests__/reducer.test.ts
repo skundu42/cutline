@@ -14,6 +14,30 @@ describe("time and seed invariants", () => {
     expect(collectInvariantViolations(branch, state.assets)).toEqual([]);
     expect(branch.durationMs).toBe(74000);
   });
+
+  it("accepts sub-millisecond floating point drift in matching clip durations", () => {
+    const state = createSeedState();
+    const branch = state.branches[SOURCE_BRANCH_ID];
+    const item = branch.tracks.find((track) => track.trackId === "v1")!.items[0];
+    const endMs = (44 * 1000) / state.project.frameRate;
+    const result = applyCommand(
+      state,
+      {
+        type: "ApplyEditBatch",
+        actor: { type: "human", surface: "ui" },
+        payload: {
+          branchId: branch.branchId,
+          expectedBranchVersion: branch.branchVersion,
+          operations: [{ op: "trim", itemId: item.itemId, endMs }],
+        },
+      },
+      ctx(),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(collectInvariantViolations(result.state.branches[SOURCE_BRANCH_ID], result.state.assets)).toEqual([]);
+  });
 });
 
 describe("command bus", () => {

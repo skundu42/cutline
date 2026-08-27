@@ -1,6 +1,12 @@
 import { rangesOverlap } from "./time";
 import type { Asset, Branch, ClipInstance, Track } from "./types";
 
+const TIME_EPSILON_MS = 0.001;
+
+function timesMatch(leftMs: number, rightMs: number): boolean {
+  return Math.abs(leftMs - rightMs) <= TIME_EPSILON_MS;
+}
+
 export function collectInvariantViolations(branch: Branch, assets: Asset[] = []): string[] {
   const violations: string[] = [];
   if (branch.durationMs < 0) {
@@ -20,7 +26,9 @@ export function collectInvariantViolations(branch: Branch, assets: Asset[] = [])
       if (item.sourceInMs >= item.sourceOutMs) {
         violations.push(`${item.itemId} has invalid source range`);
       }
-      if (item.endMs - item.startMs !== item.sourceOutMs - item.sourceInMs) {
+      // Frame-rate snapping can produce values such as 1466.6666666666667ms.
+      // Equivalent subtraction paths may differ by a few floating point bits.
+      if (!timesMatch(item.endMs - item.startMs, item.sourceOutMs - item.sourceInMs)) {
         violations.push(`${item.itemId} project duration does not match source duration`);
       }
       const asset = assetById.get(item.assetId);

@@ -227,7 +227,9 @@ export const CompareCutsInput = z.object({
 
 export const ImportMediaInput = z.object({
   projectId: z.string(),
-  uri: z.string().min(1),
+  uri: z.string().min(1).refine((uri) => uri.startsWith("/") || uri.startsWith("blob:") || uri.startsWith("idb:"), {
+    message: "Media must use a browser-local blob or same-origin path",
+  }),
   label: z.string().min(1).max(80),
   kind: z.enum(["video", "audio", "image", "graphic"]),
   mime: z.string().min(1),
@@ -236,6 +238,9 @@ export const ImportMediaInput = z.object({
   height: z.number().int().positive().optional(),
   bytes: z.number().int().nonnegative().optional(),
   checksum: z.string().optional(),
+  hasAudio: z.boolean().optional(),
+  videoCodec: z.string().optional(),
+  audioCodec: z.string().optional(),
   clientRequestId: ClientRequestIdSchema.optional(),
 });
 

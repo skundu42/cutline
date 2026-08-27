@@ -5,4 +5,6 @@ export { validateImport, kindFromMime, MAX_IMPORT_BYTES, ensureStandardTracks } 
 export { compareBranches } from "./compare";
 export { segmentCaptions, flattenWords } from "./captions";
 export { formatTimecode, rangesOverlap, isValidRange, rangeDuration } from "./time";
+export { parseTranscriptText } from "./transcriptImport";
+export { createEmptyState, MAIN_BRANCH_ID, SCHEMA_VERSION, SUPPORTED_OPERATIONS } from "./project";
 export type * from "./types";
