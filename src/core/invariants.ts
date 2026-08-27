@@ -26,6 +26,11 @@ export function collectInvariantViolations(branch: Branch, assets: Asset[] = [])
       if (item.sourceInMs >= item.sourceOutMs) {
         violations.push(`${item.itemId} has invalid source range`);
       }
+      for (const [edge, durationMs] of [["in", item.transitionInMs], ["out", item.transitionOutMs]] as const) {
+        if (durationMs != null && (!Number.isFinite(durationMs) || durationMs < 0 || durationMs > 5000)) {
+          violations.push(`${item.itemId} has invalid transition ${edge} duration`);
+        }
+      }
       // Frame-rate snapping can produce values such as 1466.6666666666667ms.
       // Equivalent subtraction paths may differ by a few floating point bits.
       if (!timesMatch(item.endMs - item.startMs, item.sourceOutMs - item.sourceInMs)) {

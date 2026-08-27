@@ -1,8 +1,8 @@
 "use client";
 
-import { compareBranches, formatTimecode } from "@/core";
+import { compareBranches, formatTimecode, listClipTransitions } from "@/core";
 import { readMappedTranscript } from "@/core/reducer";
-import type { CaptionPreset, Transition } from "@/core/types";
+import type { BasicClipTransition, CaptionPreset, Transition } from "@/core/types";
 import { WINNING_PROMPT } from "@/demo/manifest";
 import { activeBranch, useEditorStore } from "@/store/editorStore";
 import Image from "next/image";
@@ -462,6 +462,11 @@ function ClipInspector() {
   const clip = branch.tracks.flatMap((track) => track.items).find((item) => item.itemId === selectedItemId);
   const track = clip ? branch.tracks.find((entry) => entry.trackId === clip.trackId) : null;
   if (!clip || !track) return <div className="inspector-empty"><span>S</span><p>Select a timeline clip to adjust audio, fades, or delete it.</p></div>;
+  const sortedTrackItems = [...track.items].sort((left, right) => left.startMs - right.startMs || left.itemId.localeCompare(right.itemId));
+  const clipIndex = sortedTrackItems.findIndex((item) => item.itemId === clip.itemId);
+  const nextCandidate = sortedTrackItems[clipIndex + 1];
+  const nextClip = nextCandidate && Math.abs(nextCandidate.startMs - clip.endMs) <= 0.001 ? nextCandidate : null;
+  const boundaryTransition = listClipTransitions(track).find((candidate) => candidate.fromItemId === clip.itemId && candidate.toItemId === nextClip?.itemId);
   const linked = clip.trackId === "v1" ? branch.tracks.find((entry) => entry.trackId === "a1")?.items.find((item) => item.assetId === clip.assetId && item.startMs === clip.startMs && item.endMs === clip.endMs && item.sourceInMs === clip.sourceInMs) : null;
   const editItems = (operation: (itemId: string) => { op: "move"; itemId: string; startMs: number } | { op: "trim"; itemId: string; startMs?: number; endMs?: number } | { op: "delete"; itemId: string }) => dispatch({
     type: "ApplyEditBatch",
@@ -472,6 +477,21 @@ function ClipInspector() {
     type: "SetTransition", actor: { type: "human", surface: "ui" },
     payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, itemId: clip.itemId, ...(side === "in" ? { transitionIn: value } : { transitionOut: value }), fadeMs: clip.fadeMs ?? 250 },
   });
+  const transitionToNext = (value: "cut" | BasicClipTransition, durationMs?: number) => {
+    if (!nextClip) return;
+    dispatch({
+      type: "AddTransition",
+      actor: { type: "human", surface: "ui" },
+      payload: {
+        branchId: branch.branchId,
+        expectedBranchVersion: branch.branchVersion,
+        fromItemId: clip.itemId,
+        toItemId: nextClip.itemId,
+        transition: value,
+        durationMs,
+      },
+    });
+  };
   return (
     <section className="clip-inspector">
       <SectionLabel meta={track.trackId.toUpperCase()}>Selected clip</SectionLabel><p className="inspector-title">{clip.label}</p>
@@ -482,6 +502,7 @@ function ClipInspector() {
       <label className="range-field"><span>Gain <strong>{((clip.gain ?? 1) * 100).toFixed(0)}%</strong></span><input type="range" min={0} max={2} step={0.05} value={clip.gain ?? 1} onChange={(event) => dispatch({ type: "SetGain", actor: { type: "human", surface: "ui" }, payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, itemId: clip.itemId, gain: Number(event.target.value) } })} /></label>
       <div className="field-grid"><label>In<select value={clip.transitionIn ?? "cut"} onChange={(event) => transition("in", event.target.value as Transition)}>{transitionOptions()}</select></label><label>Out<select value={clip.transitionOut ?? "cut"} onChange={(event) => transition("out", event.target.value as Transition)}>{transitionOptions()}</select></label></div>
       <label className="compact-field"><span>Fade duration</span><input type="number" min={0} max={5000} step={50} value={clip.fadeMs ?? 0} onChange={(event) => dispatch({ type: "SetTransition", actor: { type: "human", surface: "ui" }, payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, itemId: clip.itemId, fadeMs: Number(event.target.value) } })} /></label>
+      {nextClip && (track.kind === "video" || track.kind === "video_overlay") ? <div className="field-grid"><label>To next clip<select value={boundaryTransition?.transition ?? "cut"} onChange={(event) => transitionToNext(event.target.value as "cut" | BasicClipTransition)}>{betweenClipTransitionOptions()}</select></label><label>Duration (ms)<input type="number" min={50} max={5000} step={50} disabled={!boundaryTransition} value={boundaryTransition?.durationMs ?? 400} onChange={(event) => { if (boundaryTransition) transitionToNext(boundaryTransition.transition, Number(event.target.value)); }} /></label></div> : null}
       <div className="inspector-actions"><button className="secondary-button" onClick={() => dispatch({ type: "MuteTrack", actor: { type: "human", surface: "ui" }, payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, trackId: track.trackId, muted: !track.muted } })}>{track.muted ? "Unmute track" : "Mute track"}</button><button className="danger-button" onClick={() => editItems((itemId) => ({ op: "delete", itemId }))}>Delete{linked ? " linked" : ""}</button></div>
     </section>
   );
@@ -489,6 +510,10 @@ function ClipInspector() {
 
 function transitionOptions() {
   return <><option value="cut">Cut</option><option value="crossfade">Crossfade</option><option value="fade_in">Fade in</option><option value="fade_out">Fade out</option><option value="dissolve">Dissolve</option></>;
+}
+
+function betweenClipTransitionOptions() {
+  return <><option value="cut">Cut</option><option value="crossfade">Crossfade</option><option value="dissolve">Dissolve</option><option value="slide_left">Slide left</option><option value="slide_right">Slide right</option><option value="dip_to_black">Dip to black</option></>;
 }
 
 function CommentForm() {

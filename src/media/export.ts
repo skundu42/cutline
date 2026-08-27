@@ -1,3 +1,4 @@
+import { getActiveClipTransition, getTransitionFrame } from "@/core";
 import type { Asset, Branch, CaptionCue, ClipInstance, EditorState } from "@/core/types";
 
 export interface LocalRenderResult {
@@ -271,16 +272,17 @@ async function prepareAudio(
   return { clip, element, gain, muted };
 }
 
-function syncVideo(entry: PreparedVisual, timeMs: number) {
+function syncVideo(entry: PreparedVisual, timeMs: number, freezeAtStart = false) {
   if (!entry.video) return;
   const video = entry.source as HTMLVideoElement;
-  if (!isActive(entry.clip, timeMs)) {
+  if (!isActive(entry.clip, timeMs) && !freezeAtStart) {
     video.pause();
     return;
   }
-  const expected = (entry.clip.sourceInMs + timeMs - entry.clip.startMs) / 1000;
+  const expected = (entry.clip.sourceInMs + (freezeAtStart ? 0 : timeMs - entry.clip.startMs)) / 1000;
   if (Math.abs(video.currentTime - expected) > 0.18) video.currentTime = expected;
-  if (video.paused) void video.play().catch(() => undefined);
+  if (freezeAtStart) video.pause();
+  else if (video.paused) void video.play().catch(() => undefined);
 }
 
 function syncAudio(entry: PreparedAudio, timeMs: number) {
@@ -364,27 +366,59 @@ export async function renderBranchLocally({ editor, branch, preset = "720p", sig
       recorder.onerror = () => reject(new Error("The browser stopped the local render"));
     });
 
+    const visualByItemId = new Map(visuals.map((entry) => [entry.clip.itemId, entry]));
+    const drawVisual = (
+      entry: PreparedVisual,
+      timeMs: number,
+      layer?: { opacity: number; translateXPercent: number; scale: number },
+      freezeAtStart = false,
+    ) => {
+      syncVideo(entry, timeMs, freezeAtStart);
+      const isPrimary = entry.clip.trackId === "v1";
+      const transform = entry.clip.transform;
+      context.save();
+      context.globalAlpha = layer?.opacity ?? transitionEnvelope(entry.clip, timeMs);
+      if (layer) {
+        context.translate(output.width * layer.translateXPercent / 100, 0);
+        if (layer.scale !== 1) {
+          context.translate(output.width / 2, output.height / 2);
+          context.scale(layer.scale, layer.scale);
+          context.translate(-output.width / 2, -output.height / 2);
+        }
+      }
+      drawMedia(
+        context,
+        entry.source,
+        output,
+        entry.clip.fit ?? "cover",
+        isPrimary
+          ? branch.crop.normalizedCenter
+          : { x: transform?.x ?? 0.5, y: transform?.y ?? 0.5 },
+        isPrimary ? branch.crop.scale : transform?.scale ?? 1,
+      );
+      context.restore();
+    };
+
     const drawFrame = (timeMs: number) => {
       context.fillStyle = "#080d0b";
       context.fillRect(0, 0, output.width, output.height);
       for (const entry of visuals) {
-        syncVideo(entry, timeMs);
-        if (!isActive(entry.clip, timeMs)) continue;
-        const isPrimary = entry.clip.trackId === "v1";
-        const transform = entry.clip.transform;
-        context.save();
-        context.globalAlpha = transitionEnvelope(entry.clip, timeMs);
-        drawMedia(
-          context,
-          entry.source,
-          output,
-          entry.clip.fit ?? "cover",
-          isPrimary
-            ? branch.crop.normalizedCenter
-            : { x: transform?.x ?? 0.5, y: transform?.y ?? 0.5 },
-          isPrimary ? branch.crop.scale : transform?.scale ?? 1,
-        );
-        context.restore();
+        if (!isActive(entry.clip, timeMs) && entry.video) (entry.source as HTMLVideoElement).pause();
+      }
+      for (const track of visualTracks) {
+        const transition = getActiveClipTransition(track, timeMs);
+        const outgoingId = transition?.outgoing.itemId;
+        for (const entry of visuals) {
+          if (entry.clip.trackId !== track.trackId || entry.clip.itemId === outgoingId || !isActive(entry.clip, timeMs)) continue;
+          drawVisual(entry, timeMs);
+        }
+        if (transition) {
+          const outgoing = visualByItemId.get(transition.outgoing.itemId);
+          const incoming = visualByItemId.get(transition.incoming.itemId);
+          const frame = getTransitionFrame(transition.transition, transition.progress);
+          if (outgoing) drawVisual(outgoing, timeMs, frame.outgoing);
+          if (incoming) drawVisual(incoming, timeMs, frame.incoming, true);
+        }
       }
       for (const entry of audioEntries) syncAudio(entry, timeMs);
       const cue = branch.captions.find((candidate) => timeMs >= candidate.startMs && timeMs < candidate.endMs);

@@ -201,6 +201,7 @@ export const SUPPORTED_OPERATIONS = [
   "place_clip",
   "place_audio",
   "set_transition",
+  "add_transition",
   "set_gain",
   "mute_track",
   "style_captions",

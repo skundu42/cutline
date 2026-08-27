@@ -5,7 +5,8 @@ export type ActorSurface = "ui" | "webmcp";
 export type BranchStatus = "working" | "accepted" | "discarded";
 export type FitMode = "cover" | "contain";
 export type CropAnchor = "center" | "face" | "safe_region";
-export type Transition = "cut" | "crossfade" | "fade_in" | "fade_out" | "dissolve";
+export type BasicClipTransition = "crossfade" | "dissolve" | "slide_left" | "slide_right" | "dip_to_black";
+export type Transition = "cut" | "fade_in" | "fade_out" | BasicClipTransition;
 export type CaptionPreset = "bold_center" | "clean_lower" | "technical_card";
 export type CaptionEmphasis = "none" | "active_word";
 export type CommentStatus = "open" | "resolved" | "proposed";
@@ -56,6 +57,8 @@ export interface ClipInstance {
   gain?: number;
   transitionIn?: Transition;
   transitionOut?: Transition;
+  transitionInMs?: number;
+  transitionOutMs?: number;
   fadeMs?: number;
   status?: string;
 }
@@ -325,6 +328,14 @@ export type EditOp =
       required?: boolean;
     }
   | {
+      op: "add_transition";
+      fromItemId: string;
+      toItemId: string;
+      transition: "cut" | BasicClipTransition;
+      durationMs?: number;
+      required?: boolean;
+    }
+  | {
       op: "set_gain";
       itemId: string;
       gain: number;
@@ -550,6 +561,18 @@ export type Command =
         transitionIn?: Transition;
         transitionOut?: Transition;
         fadeMs?: number;
+      };
+    }
+  | {
+      type: "AddTransition";
+      actor: Actor;
+      payload: {
+        branchId: string;
+        expectedBranchVersion: number;
+        fromItemId: string;
+        toItemId: string;
+        transition: "cut" | BasicClipTransition;
+        durationMs?: number;
       };
     }
   | {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyCommand, createBusContext, collectInvariantViolations } from "../index";
+import { applyCommand, createBusContext, collectInvariantViolations, getActiveClipTransition, getTransitionFrame, listClipTransitions } from "../index";
 import { createSeedState, SOURCE_BRANCH_ID } from "../../demo/manifest";
 
 function ctx() {
@@ -148,6 +148,76 @@ describe("import, audio, and transitions", () => {
     const clip = faded.state.branches[SOURCE_BRANCH_ID].tracks.find((t) => t.trackId === "v2")!.items[0];
     expect(clip.transitionIn).toBe("crossfade");
     expect(clip.fadeMs).toBe(400);
+  });
+
+  it("adds a seek-safe transition between adjacent visual clips", () => {
+    const split = applyCommand(
+      createSeedState(),
+      {
+        type: "ApplyEditBatch",
+        actor: { type: "human", surface: "ui" },
+        payload: {
+          branchId: SOURCE_BRANCH_ID,
+          expectedBranchVersion: 0,
+          operations: [{ op: "split", itemId: "c_v1_take1", atMs: 5000 }],
+        },
+      },
+      ctx(),
+    );
+    expect(split.ok).toBe(true);
+    if (!split.ok) return;
+    const clips = split.state.branches[SOURCE_BRANCH_ID].tracks.find((track) => track.trackId === "v1")!.items;
+    const result = applyCommand(
+      split.state,
+      {
+        type: "AddTransition",
+        actor: { type: "agent", surface: "webmcp" },
+        payload: {
+          branchId: SOURCE_BRANCH_ID,
+          expectedBranchVersion: 1,
+          fromItemId: clips[0].itemId,
+          toItemId: clips[1].itemId,
+          transition: "slide_left",
+        },
+      },
+      ctx(),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const track = result.state.branches[SOURCE_BRANCH_ID].tracks.find((candidate) => candidate.trackId === "v1")!;
+    expect(listClipTransitions(track)).toEqual([expect.objectContaining({
+      fromItemId: clips[0].itemId,
+      toItemId: clips[1].itemId,
+      transition: "slide_left",
+      durationMs: 350,
+      atMs: 5000,
+    })]);
+    const active = getActiveClipTransition(track, 4825);
+    expect(active?.progress).toBeCloseTo(0.5);
+    expect(getTransitionFrame("slide_left", active!.progress)).toMatchObject({
+      outgoing: { translateXPercent: -50 },
+      incoming: { translateXPercent: 50 },
+    });
+    expect(result.receipt.verification).toMatchObject({ action: "preview_range", startMs: 4500, endMs: 5500 });
+  });
+
+  it("rejects between-clip transitions across tracks", () => {
+    const result = applyCommand(
+      createSeedState(),
+      {
+        type: "AddTransition",
+        actor: { type: "agent", surface: "webmcp" },
+        payload: {
+          branchId: SOURCE_BRANCH_ID,
+          expectedBranchVersion: 0,
+          fromItemId: "c_v1_take1",
+          toItemId: "c_a1_take1",
+          transition: "crossfade",
+        },
+      },
+      ctx(),
+    );
+    expect(result).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR", message: "Transition clips must be on the same track" } });
   });
 
   it("sets gain and mutes a track", () => {

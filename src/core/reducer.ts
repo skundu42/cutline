@@ -4,7 +4,9 @@ import { digestBranch, digestProject } from "./digest";
 import { ensureStandardTracks, validateImport } from "./import";
 import { allowsOverlap, collectInvariantViolations, recomputeDuration } from "./invariants";
 import { isValidRange, rangeDuration, rangesIntersect } from "./time";
+import { DEFAULT_TRANSITION_DURATION_MS } from "./transitions";
 import type {
+  BasicClipTransition,
   Branch,
   BusContext,
   ChangedRange,
@@ -34,6 +36,7 @@ const BRANCH_WRITES: Command["type"][] = [
   "PlaceClip",
   "PlaceAudio",
   "SetTransition",
+  "AddTransition",
   "SetGain",
   "MuteTrack",
   "SetLock",
@@ -189,6 +192,54 @@ function applyTransition(
   if (transitionIn) found.item.transitionIn = transitionIn;
   if (transitionOut) found.item.transitionOut = transitionOut;
   if (fadeMs != null) found.item.fadeMs = fadeMs;
+}
+
+function applyTransitionBetween(
+  branch: Branch,
+  fromItemId: string,
+  toItemId: string,
+  transition: "cut" | BasicClipTransition,
+  requestedDurationMs?: number,
+) {
+  const from = findItem(branch, fromItemId);
+  const to = findItem(branch, toItemId);
+  if (!from || !to) {
+    throw Object.assign(new Error("Both transition clips must exist"), { code: "INVARIANT_VIOLATION" });
+  }
+  if (from.track.trackId !== to.track.trackId) {
+    throw Object.assign(new Error("Transition clips must be on the same track"), { code: "VALIDATION_ERROR" });
+  }
+  if (from.track.kind !== "video" && from.track.kind !== "video_overlay") {
+    throw Object.assign(new Error("Between-clip transitions require a visual track"), { code: "VALIDATION_ERROR" });
+  }
+  const sorted = [...from.track.items].sort((left, right) => left.startMs - right.startMs || left.itemId.localeCompare(right.itemId));
+  const fromIndex = sorted.findIndex((item) => item.itemId === fromItemId);
+  if (fromIndex < 0 || sorted[fromIndex + 1]?.itemId !== toItemId || Math.abs(from.item.endMs - to.item.startMs) > 0.001) {
+    throw Object.assign(new Error("Transition clips must be adjacent, with the outgoing clip immediately before the incoming clip"), { code: "VALIDATION_ERROR" });
+  }
+  const durationMs = transition === "cut"
+    ? 0
+    : requestedDurationMs ?? DEFAULT_TRANSITION_DURATION_MS[transition];
+  if (!Number.isInteger(durationMs) || durationMs < (transition === "cut" ? 0 : 50) || durationMs > 5000) {
+    throw Object.assign(new Error("Transition duration must be an integer from 50–5000ms"), { code: "VALIDATION_ERROR" });
+  }
+  const maxDurationMs = Math.min(from.item.endMs - from.item.startMs, to.item.endMs - to.item.startMs);
+  if (durationMs > maxDurationMs) {
+    throw Object.assign(new Error(`Transition duration cannot exceed the shorter clip (${Math.floor(maxDurationMs)}ms)`), { code: "VALIDATION_ERROR" });
+  }
+  const changedRange = {
+    startMs: Math.max(from.item.startMs, from.item.endMs - durationMs),
+    endMs: transition === "cut" ? Math.min(to.item.endMs, to.item.startMs + 1) : to.item.startMs,
+  };
+  const hit = lockHits(branch, [changedRange]);
+  if (hit) {
+    throw Object.assign(new Error("locked range"), { code: "LOCKED_RANGE", lockId: hit.lockId });
+  }
+  from.item.transitionOut = transition;
+  to.item.transitionIn = transition;
+  from.item.transitionOutMs = durationMs;
+  to.item.transitionInMs = durationMs;
+  return { from, to, durationMs, changedRange };
 }
 
 function buildPlacedItem(
@@ -531,9 +582,13 @@ function applyOp(
       itemId: ctx.id(),
       startMs: op.atMs,
       sourceInMs: found.item.sourceInMs + offset,
+      transitionIn: undefined,
+      transitionInMs: undefined,
     };
     found.item.endMs = op.atMs;
     found.item.sourceOutMs = found.item.sourceInMs + offset;
+    found.item.transitionOut = undefined;
+    found.item.transitionOutMs = undefined;
     found.track.items.push(right);
     found.track.items.sort((a, b) => a.startMs - b.startMs);
     return { changed: [{ startMs: found.item.startMs, endMs: right.endMs, changes: ["split"] }] };
@@ -650,6 +705,23 @@ function applyOp(
     applyTransition(branch, op.itemId, op.transitionIn, op.transitionOut, op.fadeMs);
     const found = findItem(branch, op.itemId)!;
     return { changed: [{ startMs: found.item.startMs, endMs: found.item.endMs, changes: ["set_transition"] }] };
+  }
+
+  if (op.op === "add_transition") {
+    try {
+      const applied = applyTransitionBetween(branch, op.fromItemId, op.toItemId, op.transition, op.durationMs);
+      return { changed: [{ ...applied.changedRange, changes: ["add_transition"] }] };
+    } catch (error) {
+      const coded = error as Error & { code?: CommandError["code"]; lockId?: string };
+      if (!required && coded.code === "LOCKED_RANGE") {
+        return {
+          skipped: { op: op.op, reason: "LOCKED_RANGE" },
+          warning: { code: "LOCKED_RANGE", message: "Skipped a transition in a protected range.", lockId: coded.lockId },
+          changed: [],
+        };
+      }
+      throw error;
+    }
   }
 
   if (op.op === "set_gain") {
@@ -1195,6 +1267,33 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
           operationId,
           changedRanges: [{ startMs: found.item.startMs, endMs: found.item.endMs, changes: ["set_transition"] }],
         });
+      } else if (command.type === "AddTransition") {
+        const applied = applyTransitionBetween(
+          branch,
+          command.payload.fromItemId,
+          command.payload.toItemId,
+          command.payload.transition,
+          command.payload.durationMs,
+        );
+        const operationId = ctx.id();
+        bump(branch, operationId);
+        receipt = receiptFor(
+          ctx,
+          branch,
+          draft,
+          command.payload.transition === "cut"
+            ? `Removed the transition between ${applied.from.item.label} and ${applied.to.item.label}.`
+            : `Added a ${command.payload.transition.replaceAll("_", " ")} transition between ${applied.from.item.label} and ${applied.to.item.label}.`,
+          {
+            operationId,
+            changedRanges: [{ ...applied.changedRange, changes: ["add_transition"] }],
+            verification: {
+              action: "preview_range",
+              startMs: Math.max(0, applied.to.item.startMs - Math.max(applied.durationMs, 500)),
+              endMs: Math.min(branch.durationMs, applied.to.item.startMs + 500),
+            },
+          },
+        );
       } else if (command.type === "SetGain") {
         applyGain(branch, command.payload.itemId, command.payload.gain);
         const found = findItem(branch, command.payload.itemId)!;

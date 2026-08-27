@@ -1,4 +1,4 @@
-import type { Branch, ChangedRange, TimeRange } from "./types";
+import type { Branch, ChangedRange, ClipInstance, TimeRange } from "./types";
 
 export interface BranchDelta {
   durationDeltaMs: number;
@@ -16,7 +16,7 @@ function intersects(range: TimeRange | undefined, startMs: number, endMs: number
 }
 
 function itemMap(branch: Branch, range?: TimeRange) {
-  const map = new Map<string, { startMs: number; endMs: number; assetId: string; sourceInMs: number; sourceOutMs: number }>();
+  const map = new Map<string, ClipInstance>();
   for (const track of branch.tracks) {
     for (const item of track.items) {
       if (intersects(range, item.startMs, item.endMs)) map.set(item.itemId, item);
@@ -43,7 +43,16 @@ export function compareBranches(left: Branch, right: Branch, range?: TimeRange):
       prev.endMs !== item.endMs ||
       prev.assetId !== item.assetId ||
       prev.sourceInMs !== item.sourceInMs ||
-      prev.sourceOutMs !== item.sourceOutMs
+      prev.sourceOutMs !== item.sourceOutMs ||
+      prev.fit !== item.fit ||
+      prev.anchor !== item.anchor ||
+      JSON.stringify(prev.transform) !== JSON.stringify(item.transform) ||
+      prev.gain !== item.gain ||
+      prev.transitionIn !== item.transitionIn ||
+      prev.transitionOut !== item.transitionOut ||
+      prev.transitionInMs !== item.transitionInMs ||
+      prev.transitionOutMs !== item.transitionOutMs ||
+      prev.fadeMs !== item.fadeMs
     ) {
       changedItemIds.push(id);
       changedRanges.push({

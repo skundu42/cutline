@@ -6,5 +6,6 @@ export { compareBranches } from "./compare";
 export { segmentCaptions, flattenWords } from "./captions";
 export { formatTimecode, rangesOverlap, isValidRange, rangeDuration } from "./time";
 export { parseTranscriptText } from "./transcriptImport";
+export { DEFAULT_TRANSITION_DURATION_MS, getActiveClipTransition, getTransitionFrame, isBasicClipTransition, listClipTransitions } from "./transitions";
 export { createEmptyState, MAIN_BRANCH_ID, SCHEMA_VERSION, SUPPORTED_OPERATIONS } from "./project";
 export type * from "./types";

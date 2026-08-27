@@ -15,6 +15,7 @@ export const P0_TOOL_NAMES = [
   "place_clip",
   "place_audio",
   "set_transition",
+  "add_transition",
   "split_clip",
   "trim_clip",
   "set_gain",

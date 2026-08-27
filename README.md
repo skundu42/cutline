@@ -66,7 +66,7 @@ Only `project_status` is available while the local project hydrates. The remaini
 | `apply_edit_batch` | Apply up to 40 atomic semantic timeline operations |
 | `place_clip`, `place_broll`, `place_audio` | Build picture, overlay, and sound tracks |
 | `split_clip`, `trim_clip`, `delete_clip` | Refine timeline clips |
-| `set_crop`, `set_transition`, `set_gain`, `mute_track` | Adjust presentation and sound |
+| `set_crop`, `set_transition`, `add_transition`, `set_gain`, `mute_track` | Adjust presentation and sound; `add_transition` applies a crossfade, dissolve, slide, or dip between adjacent clips |
 | `style_captions` | Generate styled cues from the attached transcript |
 | `add_comment`, `propose_comment_resolution` | Collaborate without impersonating or deleting human notes |
 | `preview_range`, `compare_cuts` | Verify a digest-bound range and compare branch structure |

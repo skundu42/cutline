@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const TransitionSchema = z.enum(["cut", "crossfade", "fade_in", "fade_out", "dissolve"]);
+export const BetweenClipsTransitionSchema = z.enum(["cut", "crossfade", "dissolve", "slide_left", "slide_right", "dip_to_black"]);
 
 export const TimeRangeSchema = z.object({
   startMs: z.number().int().nonnegative(),
@@ -157,6 +158,18 @@ const EditOpSchema = z.discriminatedUnion("op", [
     required: z.boolean().optional(),
   }),
   z.object({
+    op: z.literal("add_transition"),
+    fromItemId: z.string().min(1),
+    toItemId: z.string().min(1),
+    transition: BetweenClipsTransitionSchema,
+    durationMs: z.number().int().min(0).max(5000).optional(),
+    required: z.boolean().optional(),
+  }).superRefine((input, context) => {
+    if (input.transition !== "cut" && input.durationMs != null && input.durationMs < 50) {
+      context.addIssue({ code: "custom", path: ["durationMs"], message: "Animated transitions must be at least 50ms" });
+    }
+  }),
+  z.object({
     op: z.literal("set_gain"),
     itemId: z.string(),
     gain: z.number().min(0).max(2),
@@ -277,6 +290,17 @@ export const SetTransitionInput = WriteEnvelopeSchema.extend({
   fadeMs: z.number().int().min(0).max(5000).optional(),
 }).refine((input) => input.transitionIn != null || input.transitionOut != null || input.fadeMs != null, {
   message: "At least one transition property is required",
+});
+
+export const AddTransitionInput = WriteEnvelopeSchema.extend({
+  fromItemId: z.string().min(1),
+  toItemId: z.string().min(1),
+  transition: BetweenClipsTransitionSchema,
+  durationMs: z.number().int().min(0).max(5000).optional(),
+}).superRefine((input, context) => {
+  if (input.transition !== "cut" && input.durationMs != null && input.durationMs < 50) {
+    context.addIssue({ code: "custom", path: ["durationMs"], message: "Animated transitions must be at least 50ms" });
+  }
 });
 
 export const SplitClipInput = WriteEnvelopeSchema.extend({

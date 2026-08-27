@@ -127,6 +127,41 @@ describe("WebMCP registered handlers", () => {
     });
   });
 
+  it("lets an agent add one transition between adjacent clips", async () => {
+    await registerTools();
+    const split = useEditorStore.getState().dispatch({
+      type: "ApplyEditBatch",
+      actor: { type: "human", surface: "ui" },
+      payload: {
+        branchId: SOURCE_BRANCH_ID,
+        expectedBranchVersion: 0,
+        operations: [{ op: "split", itemId: "c_v1_take1", atMs: 5000 }],
+      },
+    });
+    expect(split.ok).toBe(true);
+    if (!split.ok) return;
+    const clips = split.state.branches[SOURCE_BRANCH_ID].tracks.find((track) => track.trackId === "v1")!.items;
+    const result = await tools.get("add_transition")!.execute({
+      projectId: "proj_kv_demo_v1",
+      branchId: SOURCE_BRANCH_ID,
+      expectedBranchVersion: 1,
+      clientRequestId: "transition-1",
+      fromItemId: clips[0].itemId,
+      toItemId: clips[1].itemId,
+      transition: "crossfade",
+      durationMs: 300,
+    });
+    expect(result).toMatchObject({ branchVersion: 2, transition: "crossfade", audioPolicy: "unchanged" });
+    const timeline = await tools.get("get_timeline")!.execute({
+      projectId: "proj_kv_demo_v1",
+      branchId: SOURCE_BRANCH_ID,
+      include: ["clips"],
+    }) as { tracks: Array<{ trackId: string; transitions: unknown[] }> };
+    expect(timeline.tracks.find((track) => track.trackId === "v1")?.transitions).toEqual([
+      expect.objectContaining({ transition: "crossfade", atMs: 5000, durationMs: 300 }),
+    ]);
+  });
+
   it("honors read filters and marks project content as untrusted", async () => {
     await registerTools();
     const inspect = await tools.get("inspect_project")!.execute({

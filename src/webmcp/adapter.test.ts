@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { jsonSchema, InspectProjectInput, ApplyEditBatchInput, ControlPlaybackInput, TimeRangeSchema } from "./schemas";
+import { AddTransitionInput, jsonSchema, InspectProjectInput, ApplyEditBatchInput, ControlPlaybackInput, TimeRangeSchema } from "./schemas";
 import { HUMAN_ONLY_ABSENT, P0_TOOL_NAMES } from "./catalog";
 
 describe("webmcp contract", () => {
@@ -14,6 +14,7 @@ describe("webmcp contract", () => {
     expect(P0_TOOL_NAMES).toContain("apply_edit_batch");
     expect(P0_TOOL_NAMES).toContain("import_media");
     expect(P0_TOOL_NAMES).toContain("place_audio");
+    expect(P0_TOOL_NAMES).toContain("add_transition");
     expect(P0_TOOL_NAMES).toEqual(expect.arrayContaining([
       "control_playback",
       "select_branch",
@@ -26,6 +27,26 @@ describe("webmcp contract", () => {
     expect(HUMAN_ONLY_ABSENT).toEqual(
       expect.arrayContaining(["lock_range", "accept_branch", "export", "publish"]),
     );
+  });
+
+  it("accepts simple between-clip transitions and validates their duration", () => {
+    expect(AddTransitionInput.safeParse({
+      projectId: "p",
+      branchId: "b",
+      expectedBranchVersion: 1,
+      fromItemId: "out",
+      toItemId: "in",
+      transition: "slide_left",
+    }).success).toBe(true);
+    expect(AddTransitionInput.safeParse({
+      projectId: "p",
+      branchId: "b",
+      expectedBranchVersion: 1,
+      fromItemId: "out",
+      toItemId: "in",
+      transition: "crossfade",
+      durationMs: 25,
+    }).success).toBe(false);
   });
 
   it("rejects inverted ranges and invalid playback actions", () => {

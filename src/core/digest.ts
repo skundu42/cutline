@@ -46,6 +46,8 @@ export function canonicalBranchState(branch: Branch) {
           gain: item.gain ?? null,
           transitionIn: item.transitionIn ?? null,
           transitionOut: item.transitionOut ?? null,
+          transitionInMs: item.transitionInMs ?? null,
+          transitionOutMs: item.transitionOutMs ?? null,
           fadeMs: item.fadeMs ?? null,
         })),
     })),

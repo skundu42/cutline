@@ -1,4 +1,4 @@
-import { compareBranches, digestBranch, readMappedTranscript } from "@/core";
+import { compareBranches, digestBranch, listClipTransitions, readMappedTranscript } from "@/core";
 import { SUPPORTED_OPERATIONS } from "@/core/project";
 import { useEditorStore, activeBranch } from "@/store/editorStore";
 import type { InputSchema, ModelContext, WebMcpToolAnnotations } from "@mcp-b/webmcp-types";
@@ -9,6 +9,7 @@ import { getLocalMediaCapabilities } from "@/media/localMedia";
 import { getLocalStorageBackend } from "@/persistence/db";
 import {
   AddCommentInput,
+  AddTransitionInput,
   ApplyEditBatchInput,
   CompareCutsInput,
   ControlPlaybackInput,
@@ -217,6 +218,7 @@ export async function registerAll(controller: AbortController, scope: Registrati
         capabilities: {
           maxTracks: 5,
           supportedOperations: [...SUPPORTED_OPERATIONS],
+          betweenClipTransitions: ["crossfade", "dissolve", "slide_left", "slide_right", "dip_to_black"],
           exportPresets: ["720p"],
           humanOnly: HUMAN_ONLY_ABSENT,
           importLimitBytes: 500 * 1024 * 1024,
@@ -269,8 +271,13 @@ export async function registerAll(controller: AbortController, scope: Registrati
               gain: item.gain,
               transitionIn: item.transitionIn,
               transitionOut: item.transitionOut,
+              transitionInMs: item.transitionInMs,
+              transitionOutMs: item.transitionOutMs,
               fadeMs: item.fadeMs,
             })) : [],
+          transitions: include.has("clips")
+            ? listClipTransitions(track).filter((transition) => inRange(transition.atMs - transition.durationMs, transition.atMs))
+            : [],
         })),
         ...(include.has("captions") ? { captions: captions.slice(0, 500) } : {}),
         ...(include.has("comments") ? { comments: comments.slice(0, 100) } : {}),
@@ -628,7 +635,7 @@ export async function registerAll(controller: AbortController, scope: Registrati
   await register(
     "set_transition",
     "Set transition",
-    "Set cut, crossfade, fade_in, fade_out, or dissolve on a clip, with optional fadeMs. Does not export.",
+    "Set an individual clip edge fade (cut, crossfade, fade_in, fade_out, or dissolve), with optional fadeMs. For a visual handoff between adjacent clips, prefer add_transition. Does not export.",
     jsonSchema(SetTransitionInput),
     (input) => {
       const parsed = SetTransitionInput.parse(input);
@@ -646,6 +653,30 @@ export async function registerAll(controller: AbortController, scope: Registrati
       });
       if (!result.ok) return toolError(result.error.code, result.error.message, { branchVersion: result.error.branchVersion });
       return result.receipt;
+    },
+  );
+
+  await register(
+    "add_transition",
+    "Add transition between clips",
+    "Add or remove a visual transition at the boundary between two adjacent clips on the same track. Pass the outgoing and incoming item IDs from get_timeline. Types: crossfade, dissolve, slide_left, slide_right, dip_to_black, or cut to remove. Duration defaults by type. Audio is unchanged. Does not export.",
+    jsonSchema(AddTransitionInput),
+    (input) => {
+      const parsed = AddTransitionInput.parse(input);
+      const result = store().dispatch({
+        type: "AddTransition",
+        actor: { type: "agent", surface: "webmcp" },
+        payload: {
+          branchId: parsed.branchId,
+          expectedBranchVersion: parsed.expectedBranchVersion,
+          fromItemId: parsed.fromItemId,
+          toItemId: parsed.toItemId,
+          transition: parsed.transition,
+          durationMs: parsed.durationMs,
+        },
+      });
+      if (!result.ok) return toolError(result.error.code, result.error.message, { branchVersion: result.error.branchVersion, lockId: result.error.lockId });
+      return { ...result.receipt, transition: parsed.transition, audioPolicy: "unchanged" };
     },
   );
 
