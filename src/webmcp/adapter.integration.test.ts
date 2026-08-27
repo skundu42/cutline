@@ -12,6 +12,18 @@ vi.mock("@/persistence/db", () => ({
   getLocalStorageBackend: vi.fn(() => "indexeddb"),
 }));
 vi.mock("@/telemetry", () => ({ track: vi.fn() }));
+vi.mock("@/media/export", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/media/export")>();
+  return {
+    ...actual,
+    renderBranchLocally: vi.fn(async () => ({
+      blob: new Blob(["rendered"], { type: "video/webm" }),
+      mimeType: "video/webm",
+      width: 1280,
+      height: 720,
+    })),
+  };
+});
 
 import { createSeedState, SOURCE_BRANCH_ID } from "@/demo/manifest";
 import { digestBranch } from "@/core";
@@ -51,6 +63,7 @@ function resetStore(ready = true) {
     toolLifecycle: [],
     lastError: null,
     registeredTools: [],
+    compare: { enabled: false, leftId: null, rightId: null, show: "left" },
   });
 }
 
@@ -205,6 +218,103 @@ describe("WebMCP registered handlers", () => {
     expect(Object.keys(useEditorStore.getState().editor.branches)).toHaveLength(2);
   });
 
+  it("gives agents first-class control over transcripts, locks, comments, export, publish, and acceptance", async () => {
+    await registerTools();
+    const imported = await tools.get("import_transcript")!.execute({
+      projectId: "proj_kv_demo_v1",
+      clientRequestId: "transcript-agent-1",
+      label: "agent transcript",
+      segments: [{
+        segmentId: "agent-segment",
+        startMs: 0,
+        endMs: 1000,
+        speaker: "Agent",
+        text: "First-class editing.",
+        confidence: 1,
+        words: [{ startMs: 0, endMs: 1000, text: "First-class editing." }],
+      }],
+    });
+    expect(imported).toMatchObject({ segmentCount: 1 });
+
+    const locked = await tools.get("lock_range")!.execute({
+      projectId: "proj_kv_demo_v1",
+      branchId: SOURCE_BRANCH_ID,
+      expectedBranchVersion: 0,
+      clientRequestId: "lock-agent-1",
+      range: { startMs: 0, endMs: 1000 },
+      label: "Agent lock",
+    }) as { branchVersion: number; lock: { lockId: string; createdBy: string } };
+    expect(locked).toMatchObject({ branchVersion: 1, lock: { createdBy: "agent" } });
+
+    const unlocked = await tools.get("unlock_range")!.execute({
+      projectId: "proj_kv_demo_v1",
+      branchId: SOURCE_BRANCH_ID,
+      expectedBranchVersion: 1,
+      clientRequestId: "unlock-agent-1",
+      lockId: locked.lock.lockId,
+    });
+    expect(unlocked).toMatchObject({ branchVersion: 2 });
+
+    const commented = await tools.get("add_comment")!.execute({
+      projectId: "proj_kv_demo_v1",
+      branchId: SOURCE_BRANCH_ID,
+      expectedBranchVersion: 2,
+      clientRequestId: "comment-agent-resolve-1",
+      range: { startMs: 1000, endMs: 2000 },
+      text: "Resolved by the same first-class actor.",
+    });
+    expect(commented).toMatchObject({ branchVersion: 3 });
+    const commentId = useEditorStore.getState().editor.branches[SOURCE_BRANCH_ID].comments[0].commentId;
+    const resolved = await tools.get("propose_comment_resolution")!.execute({
+      projectId: "proj_kv_demo_v1",
+      branchId: SOURCE_BRANCH_ID,
+      expectedBranchVersion: 3,
+      clientRequestId: "resolve-agent-1",
+      commentId,
+      proposal: "Done.",
+    });
+    expect(resolved).toMatchObject({ branchVersion: 4, summary: "Resolved comment." });
+    expect(useEditorStore.getState().editor.branches[SOURCE_BRANCH_ID].comments[0].status).toBe("resolved");
+
+    const exported = await tools.get("export")!.execute({
+      projectId: "proj_kv_demo_v1",
+      branchId: SOURCE_BRANCH_ID,
+      expectedBranchVersion: 4,
+      clientRequestId: "export-agent-1",
+      preset: "720p",
+    }) as { exportId: string };
+    expect(exported).toMatchObject({ mimeType: "video/webm", width: 1280, height: 720 });
+    const published = await tools.get("publish")!.execute({
+      projectId: "proj_kv_demo_v1",
+      branchId: SOURCE_BRANCH_ID,
+      expectedBranchVersion: 4,
+      clientRequestId: "publish-agent-1",
+      exportId: exported.exportId,
+    });
+    expect(published).toMatchObject({ summary: "Published local export.", export: { publishedBy: "agent" } });
+
+    const accepted = await tools.get("accept_branch")!.execute({
+      projectId: "proj_kv_demo_v1",
+      branchId: SOURCE_BRANCH_ID,
+      expectedBranchVersion: 4,
+      clientRequestId: "accept-agent-1",
+    });
+    expect(accepted).toMatchObject({ selectedFinalBranchId: SOURCE_BRANCH_ID });
+    expect(useEditorStore.getState().editor.branches[SOURCE_BRANCH_ID].status).toBe("accepted");
+  });
+
+  it("lets an agent delete a digest-matched local project", async () => {
+    await registerTools();
+    const inspected = await tools.get("inspect_project")!.execute({ projectId: "proj_kv_demo_v1" }) as { project: { stateDigest: string } };
+    const deleted = await tools.get("delete_project")!.execute({
+      projectId: "proj_kv_demo_v1",
+      expectedProjectDigest: inspected.project.stateDigest,
+      clientRequestId: "delete-agent-1",
+    });
+    expect(deleted).toMatchObject({ deletedProjectId: "proj_kv_demo_v1", summary: "Deleted the local project and created an empty workspace." });
+    expect(useEditorStore.getState().editor.project.projectId).not.toBe("proj_kv_demo_v1");
+  });
+
   it("rejects WebMCP writes after human acceptance", async () => {
     await registerTools();
     const accepted = useEditorStore.getState().dispatch({
@@ -253,5 +363,46 @@ describe("WebMCP registered handlers", () => {
     });
     expect(compared).toMatchObject({ range: { startMs: 1000, endMs: 2000 } });
     expect(useEditorStore.getState().playheadMs).toBe(1000);
+  });
+
+  it("exits comparison mode when selecting or previewing a branch", async () => {
+    await registerTools();
+    const created = await tools.get("create_cut_branch")!.execute({
+      projectId: "proj_kv_demo_v1",
+      baseBranchId: SOURCE_BRANCH_ID,
+      expectedBaseVersion: 0,
+      clientRequestId: "branch-selection-regression",
+      name: "Selection regression cut",
+    }) as { branchId: string };
+
+    await tools.get("compare_cuts")!.execute({
+      projectId: "proj_kv_demo_v1",
+      leftBranchId: SOURCE_BRANCH_ID,
+      rightBranchId: created.branchId,
+    });
+    expect(useEditorStore.getState().compare.enabled).toBe(true);
+
+    await tools.get("select_branch")!.execute({
+      projectId: "proj_kv_demo_v1",
+      branchId: created.branchId,
+    });
+    expect(useEditorStore.getState().editor.project.activeBranchId).toBe(created.branchId);
+    expect(useEditorStore.getState().compare.enabled).toBe(false);
+
+    await tools.get("compare_cuts")!.execute({
+      projectId: "proj_kv_demo_v1",
+      leftBranchId: SOURCE_BRANCH_ID,
+      rightBranchId: created.branchId,
+    });
+    const previewed = await tools.get("preview_range")!.execute({
+      projectId: "proj_kv_demo_v1",
+      branchId: created.branchId,
+      stateDigest: digestBranch(useEditorStore.getState().editor.branches[created.branchId]),
+      startMs: 0,
+      endMs: 1000,
+    });
+    expect(previewed).toMatchObject({ mode: "shared_viewer" });
+    expect(useEditorStore.getState().editor.project.activeBranchId).toBe(created.branchId);
+    expect(useEditorStore.getState().compare.enabled).toBe(false);
   });
 });

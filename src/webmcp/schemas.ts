@@ -44,6 +44,30 @@ export const ReadTranscriptInput = z.object({
   cursor: z.string().optional(),
 });
 
+const TranscriptWordInput = z.object({
+  startMs: z.number().int().nonnegative(),
+  endMs: z.number().int().positive(),
+  text: z.string().min(1).max(500),
+}).refine((word) => word.endMs > word.startMs, { message: "endMs must be greater than startMs", path: ["endMs"] });
+
+const TranscriptSegmentInput = z.object({
+  segmentId: z.string().min(1).max(128),
+  startMs: z.number().int().nonnegative(),
+  endMs: z.number().int().positive(),
+  speaker: z.string().min(1).max(120),
+  text: z.string().max(5000),
+  confidence: z.number().min(0).max(1),
+  markers: z.array(z.enum(["silence", "false_start", "alternate_take"])).optional(),
+  words: z.array(TranscriptWordInput).max(5000).optional(),
+}).refine((segment) => segment.endMs > segment.startMs, { message: "endMs must be greater than startMs", path: ["endMs"] });
+
+export const ImportTranscriptInput = z.object({
+  projectId: z.string(),
+  label: z.string().min(1).max(80),
+  segments: z.array(TranscriptSegmentInput).min(1).max(10_000),
+  clientRequestId: ClientRequestIdSchema.optional(),
+});
+
 export const GetCommentsInput = z.object({
   projectId: z.string(),
   branchId: z.string(),
@@ -72,6 +96,31 @@ export const AddCommentInput = WriteEnvelopeSchema.extend({
 export const ProposeCommentResolutionInput = WriteEnvelopeSchema.extend({
   commentId: z.string(),
   proposal: z.string().trim().min(1).max(500),
+});
+
+export const LockRangeInput = WriteEnvelopeSchema.extend({
+  range: TimeRangeSchema,
+  label: z.string().trim().min(1).max(120),
+});
+
+export const UnlockRangeInput = WriteEnvelopeSchema.extend({
+  lockId: z.string().min(1),
+});
+
+export const AcceptBranchInput = WriteEnvelopeSchema;
+
+export const ExportInput = WriteEnvelopeSchema.extend({
+  preset: z.enum(["720p", "480p"]).optional(),
+});
+
+export const PublishInput = WriteEnvelopeSchema.extend({
+  exportId: z.string().min(1),
+});
+
+export const DeleteProjectInput = z.object({
+  projectId: z.string(),
+  expectedProjectDigest: z.string().min(1),
+  clientRequestId: ClientRequestIdSchema.optional(),
 });
 
 export const HistoryEditInput = WriteEnvelopeSchema;

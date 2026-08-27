@@ -94,7 +94,8 @@ export interface LockedRange {
   startMs: number;
   endMs: number;
   label: string;
-  createdByHumanAt: number;
+  createdAt: number;
+  createdBy: ActorType;
 }
 
 export interface Comment {
@@ -186,6 +187,8 @@ export interface ExportArtifact {
   createdAt: number;
   uri: string;
   bytes?: number;
+  publishedAt?: number;
+  publishedBy?: ActorType;
 }
 
 export interface EditorState {
@@ -493,6 +496,15 @@ export type Command =
         width: number;
         height: number;
         bytes?: number;
+      };
+    }
+  | {
+      type: "PublishExport";
+      actor: Actor;
+      payload: {
+        branchId: string;
+        expectedBranchVersion: number;
+        exportId: string;
       };
     }
   | {

@@ -1,0 +1,39 @@
+{
+  "format": "video/mp4",
+  "width": 1280,
+  "height": 720,
+  "frameRate": 30,
+  "durationSeconds": 10,
+  "clips": [
+    {
+      "id": "webmcp-overview",
+      "title": "WebMCP Overview",
+      "src": "/demo/webmcp-clips/01-webmcp-overview.mp4"
+    },
+    {
+      "id": "inspect-first",
+      "title": "Inspect First",
+      "src": "/demo/webmcp-clips/02-inspect-first.mp4"
+    },
+    {
+      "id": "reversible-branch",
+      "title": "Reversible Branch",
+      "src": "/demo/webmcp-clips/03-reversible-branch.mp4"
+    },
+    {
+      "id": "semantic-edit",
+      "title": "Semantic Edit",
+      "src": "/demo/webmcp-clips/04-semantic-edit.mp4"
+    },
+    {
+      "id": "protected-ranges",
+      "title": "Protected Ranges",
+      "src": "/demo/webmcp-clips/05-protected-ranges.mp4"
+    },
+    {
+      "id": "visible-proof",
+      "title": "Visible Proof",
+      "src": "/demo/webmcp-clips/06-visible-proof.mp4"
+    }
+  ]
+}

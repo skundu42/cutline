@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { AddTransitionInput, jsonSchema, InspectProjectInput, ApplyEditBatchInput, ControlPlaybackInput, TimeRangeSchema } from "./schemas";
-import { HUMAN_ONLY_ABSENT, P0_TOOL_NAMES } from "./catalog";
+import { AddTransitionInput, jsonSchema, InspectProjectInput, ApplyEditBatchInput, ControlPlaybackInput, LockRangeInput, TimeRangeSchema } from "./schemas";
+import { P0_TOOL_NAMES } from "./catalog";
 
 describe("webmcp contract", () => {
   it("exposes json schemas for inspect and edit batch", () => {
@@ -10,7 +10,7 @@ describe("webmcp contract", () => {
     expect(batch).toMatchObject({ type: "object" });
   });
 
-  it("does not include human-only operations in the tool catalog", () => {
+  it("exposes first-class agent operations in the tool catalog", () => {
     expect(P0_TOOL_NAMES).toContain("apply_edit_batch");
     expect(P0_TOOL_NAMES).toContain("import_media");
     expect(P0_TOOL_NAMES).toContain("place_audio");
@@ -23,10 +23,22 @@ describe("webmcp contract", () => {
       "undo_edit",
       "redo_edit",
     ]));
-    expect(P0_TOOL_NAMES).not.toContain("export");
-    expect(HUMAN_ONLY_ABSENT).toEqual(
-      expect.arrayContaining(["lock_range", "accept_branch", "export", "publish"]),
-    );
+    expect(P0_TOOL_NAMES).toEqual(expect.arrayContaining([
+      "import_transcript",
+      "lock_range",
+      "unlock_range",
+      "accept_branch",
+      "export",
+      "publish",
+      "delete_project",
+    ]));
+    expect(LockRangeInput.safeParse({
+      projectId: "p",
+      branchId: "b",
+      expectedBranchVersion: 1,
+      range: { startMs: 0, endMs: 1000 },
+      label: "Agent-owned lock",
+    }).success).toBe(true);
   });
 
   it("accepts simple between-clip transitions and validates their duration", () => {

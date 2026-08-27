@@ -60,6 +60,7 @@ Only `project_status` is available while the local project hydrates. The remaini
 |---|---|
 | `project_status`, `inspect_project` | Check readiness, capabilities, assets, branches, tracks, and locks |
 | `get_timeline`, `read_transcript`, `get_comments` | Read bounded editing context |
+| `import_transcript` | Replace the project transcript with structured, word-timed segments |
 | `select_branch`, `control_playback` | Control the shared visible workspace |
 | `import_media` | Register browser-local or same-origin media without uploading it |
 | `create_cut_branch` | Create a reversible working branch from an explicit version |
@@ -68,21 +69,19 @@ Only `project_status` is available while the local project hydrates. The remaini
 | `split_clip`, `trim_clip`, `delete_clip` | Refine timeline clips |
 | `set_crop`, `set_transition`, `add_transition`, `set_gain`, `mute_track` | Adjust presentation and sound; `add_transition` applies a crossfade, dissolve, slide, or dip between adjacent clips |
 | `style_captions` | Generate styled cues from the attached transcript |
-| `add_comment`, `propose_comment_resolution` | Collaborate without impersonating or deleting human notes |
+| `add_comment`, `propose_comment_resolution` | Add and resolve attributed timeline notes |
 | `preview_range`, `compare_cuts` | Verify a digest-bound range and compare branch structure |
+| `lock_range`, `unlock_range` | Create and remove versioned edit protections |
+| `accept_branch` | Select a branch as the immutable final cut |
+| `export`, `publish` | Render locally and mark the digest-bound artifact as published in Cutline |
+| `delete_project` | Delete a digest-matched local project and open an empty workspace |
 | `undo_edit`, `redo_edit` | Reverse or restore working-branch edits |
 
-### Human-control boundaries
+### Actor parity
 
-Agents can operate only on media already available to the browser. They cannot:
+UI users and agents use the same command bus and can import transcripts, manage locks, accept branches, render, publish local artifacts, resolve comments, and delete projects. Identity remains explicit in audit events and comments, but it does not change authorization.
 
-- accept a branch as the final cut;
-- render, download, upload, or publish media;
-- delete the local project;
-- remove or impersonate human comments; or
-- silently overwrite a stale or accepted branch.
-
-Mutations require the latest branch version, support idempotent request IDs, respect protected ranges, and return a receipt containing the new version, state digest, changed ranges, duration delta, and warnings.
+Mutations still require the latest branch or project digest, support idempotent request IDs, respect protected ranges, and return a receipt containing the new version, state digest, changed ranges, duration delta, and warnings. Accepted branches remain immutable for every actor; further edits start from a new working branch. External upload and publishing destinations are not configured for either actor.
 
 ## Local media workflow
 
@@ -95,7 +94,7 @@ Rendering is entirely local and composites V1/V2, crop settings, fades, captions
 ## Architecture
 
 ```text
-Human UI ---------+
+User UI ----------+
                   +--> shared editor store --> deterministic reducer --> receipts/digests
 WebMCP tools -----+             |                        |
                                 |                        +--> undo/redo + invariants

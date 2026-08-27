@@ -1,30 +1,36 @@
-import { compareBranches, digestBranch, listClipTransitions, readMappedTranscript } from "@/core";
+import { compareBranches, digestBranch, digestProject, listClipTransitions, readMappedTranscript } from "@/core";
 import { SUPPORTED_OPERATIONS } from "@/core/project";
 import { useEditorStore, activeBranch } from "@/store/editorStore";
 import type { InputSchema, ModelContext, WebMcpToolAnnotations } from "@mcp-b/webmcp-types";
 import { useEffect } from "react";
 import { ZodError } from "zod";
-import { HUMAN_ONLY_ABSENT, P0_TOOL_NAMES } from "./catalog";
+import { P0_TOOL_NAMES } from "./catalog";
 import { getLocalMediaCapabilities } from "@/media/localMedia";
 import { getLocalStorageBackend } from "@/persistence/db";
 import {
   AddCommentInput,
+  AcceptBranchInput,
   AddTransitionInput,
   ApplyEditBatchInput,
   CompareCutsInput,
   ControlPlaybackInput,
   CreateCutBranchInput,
   DeleteClipInput,
+  DeleteProjectInput,
+  ExportInput,
   GetCommentsInput,
   GetTimelineInput,
   ImportMediaInput,
+  ImportTranscriptInput,
   HistoryEditInput,
   InspectProjectInput,
   MuteTrackInput,
+  LockRangeInput,
   PlaceAudioInput,
   PlaceBrollInput,
   PlaceClipInput,
   PreviewRangeInput,
+  PublishInput,
   ProposeCommentResolutionInput,
   ProjectStatusInput,
   ReadTranscriptInput,
@@ -35,6 +41,7 @@ import {
   SplitClipInput,
   StyleCaptionsInput,
   TrimClipInput,
+  UnlockRangeInput,
   jsonSchema,
 } from "./schemas";
 
@@ -177,6 +184,7 @@ export async function registerAll(controller: AbortController, scope: Registrati
           durationMs: branch.durationMs,
           aspectRatio: branch.crop.aspectRatio,
           activeBranchId: editor.project.activeBranchId,
+          stateDigest: digestProject(editor),
         },
         ...(include.has("assets") ? { assets: editor.assets.slice(0, 200).map((asset) => ({
           assetId: asset.assetId,
@@ -209,6 +217,8 @@ export async function registerAll(controller: AbortController, scope: Registrati
           startMs: lock.startMs,
           endMs: lock.endMs,
           label: lock.label,
+          createdAt: lock.createdAt,
+          createdBy: lock.createdBy,
         })) } : {}),
         ...(include.has("analysis") ? { analysis: {
           transcriptSegmentCount: editor.transcript.length,
@@ -220,7 +230,9 @@ export async function registerAll(controller: AbortController, scope: Registrati
           supportedOperations: [...SUPPORTED_OPERATIONS],
           betweenClipTransitions: ["crossfade", "dissolve", "slide_left", "slide_right", "dip_to_black"],
           exportPresets: ["720p"],
-          humanOnly: HUMAN_ONLY_ABSENT,
+          accessModel: "actors_equal",
+          agentOperations: [...P0_TOOL_NAMES],
+          publishing: { scope: "local", externalDestinationsConfigured: false },
           importLimitBytes: 500 * 1024 * 1024,
           processing: getLocalMediaCapabilities(),
           storageBackend: getLocalStorageBackend(),
@@ -331,9 +343,28 @@ export async function registerAll(controller: AbortController, scope: Registrati
   );
 
   await register(
+    "import_transcript",
+    "Import transcript",
+    "Import structured, word-timed transcript segments into the project. Existing transcript data is replaced.",
+    jsonSchema(ImportTranscriptInput),
+    (input) => {
+      const parsed = ImportTranscriptInput.parse(input);
+      const { editor, dispatch } = store();
+      if (parsed.projectId !== editor.project.projectId) return toolError("PROJECT_NOT_FOUND", "Unknown project");
+      const result = dispatch({
+        type: "ImportTranscript",
+        actor: { type: "agent", surface: "webmcp" },
+        payload: { label: parsed.label, segments: parsed.segments },
+      });
+      if (!result.ok) return toolError(result.error.code, result.error.message);
+      return { ...result.receipt, segmentCount: result.state.transcript.length };
+    },
+  );
+
+  await register(
     "get_comments",
     "Get comments",
-    "Read time-coded comments on a branch. Human comment text cannot be deleted by tools. Does not mutate.",
+    "Read time-coded comments on a branch. Does not mutate.",
     jsonSchema(GetCommentsInput),
     (input) => {
       const parsed = GetCommentsInput.parse(input);
@@ -404,7 +435,7 @@ export async function registerAll(controller: AbortController, scope: Registrati
   await register(
     "add_comment",
     "Add agent comment",
-    "Add a clearly attributed agent comment to a timeline range. This cannot impersonate or delete human comments.",
+    "Add a clearly attributed agent comment to a timeline range.",
     jsonSchema(AddCommentInput),
     (input) => {
       const parsed = AddCommentInput.parse(input);
@@ -418,7 +449,7 @@ export async function registerAll(controller: AbortController, scope: Registrati
   await register(
     "propose_comment_resolution",
     "Propose comment resolution",
-    "Attach a proposed resolution to a time-coded comment after making a revision. The human comment remains open and cannot be deleted by this tool.",
+    "Resolve any time-coded comment with an attributed resolution note.",
     jsonSchema(ProposeCommentResolutionInput),
     (input) => {
       const parsed = ProposeCommentResolutionInput.parse(input);
@@ -430,9 +461,55 @@ export async function registerAll(controller: AbortController, scope: Registrati
   );
 
   await register(
+    "lock_range",
+    "Lock range",
+    "Protect a timeline range from intersecting edits. Agents and UI users can both unlock it later.",
+    jsonSchema(LockRangeInput),
+    (input) => {
+      const parsed = LockRangeInput.parse(input);
+      const result = store().dispatch({
+        type: "SetLock",
+        actor: { type: "agent", surface: "webmcp" },
+        payload: {
+          action: "lock",
+          branchId: parsed.branchId,
+          expectedBranchVersion: parsed.expectedBranchVersion,
+          range: parsed.range,
+          label: parsed.label,
+        },
+      });
+      if (!result.ok) return toolError(result.error.code, result.error.message, { branchVersion: result.error.branchVersion });
+      const lock = result.state.branches[parsed.branchId].locks.find((candidate) => candidate.label === parsed.label && candidate.startMs === parsed.range.startMs && candidate.endMs === parsed.range.endMs);
+      return { ...result.receipt, lock };
+    },
+  );
+
+  await register(
+    "unlock_range",
+    "Unlock range",
+    "Remove a timeline range lock by ID.",
+    jsonSchema(UnlockRangeInput),
+    (input) => {
+      const parsed = UnlockRangeInput.parse(input);
+      const result = store().dispatch({
+        type: "SetLock",
+        actor: { type: "agent", surface: "webmcp" },
+        payload: {
+          action: "unlock",
+          branchId: parsed.branchId,
+          expectedBranchVersion: parsed.expectedBranchVersion,
+          lockId: parsed.lockId,
+        },
+      });
+      if (!result.ok) return toolError(result.error.code, result.error.message, { branchVersion: result.error.branchVersion });
+      return result.receipt;
+    },
+  );
+
+  await register(
     "create_cut_branch",
     "Create cut branch",
-    "Create a writable working branch from an explicit base version. Never changes the human-selected final branch and never exports. Verify with get_timeline.",
+    "Create a writable working branch from an explicit base version. Verify with get_timeline.",
     jsonSchema(CreateCutBranchInput),
     (input) => {
       const parsed = CreateCutBranchInput.parse(input);
@@ -460,7 +537,7 @@ export async function registerAll(controller: AbortController, scope: Registrati
   await register(
     "apply_edit_batch",
     "Apply edit batch",
-    "Atomically apply bounded timeline edits to a writable Cutline branch. Requires the branch version from the latest read. Required operations fail the whole batch; optional operations may skip LOCKED_RANGE. Never exports, publishes, locks, or accepts.",
+    "Atomically apply bounded timeline edits to a writable Cutline branch. Requires the branch version from the latest read. Required operations fail the whole batch; optional operations may skip LOCKED_RANGE.",
     jsonSchema(ApplyEditBatchInput),
     (input) => {
       const parsed = ApplyEditBatchInput.parse(input);
@@ -851,7 +928,7 @@ export async function registerAll(controller: AbortController, scope: Registrati
   await register(
     "compare_cuts",
     "Compare cuts",
-    "Compare two branches and return a structural delta plus a synchronized compare target. Does not accept or export. The human chooses the final cut.",
+    "Compare two branches and return a structural delta plus a synchronized compare target. Does not mutate either branch.",
     jsonSchema(CompareCutsInput),
     (input) => {
       const parsed = CompareCutsInput.parse(input);
@@ -873,6 +950,97 @@ export async function registerAll(controller: AbortController, scope: Registrati
         left: { branchId: left.branchId, branchVersion: left.branchVersion, durationMs: left.durationMs },
         right: { branchId: right.branchId, branchVersion: right.branchVersion, durationMs: right.durationMs },
         range: parsed.range,
+      };
+    },
+  );
+
+  await register(
+    "accept_branch",
+    "Accept branch",
+    "Select a version-checked branch as the final cut. Accepted branches become immutable until a new working branch is created.",
+    jsonSchema(AcceptBranchInput),
+    (input) => {
+      const parsed = AcceptBranchInput.parse(input);
+      const result = store().dispatch({
+        type: "AcceptBranch",
+        actor: { type: "agent", surface: "webmcp" },
+        payload: { branchId: parsed.branchId, expectedBranchVersion: parsed.expectedBranchVersion },
+      });
+      if (!result.ok) return toolError(result.error.code, result.error.message, { branchVersion: result.error.branchVersion });
+      return { ...result.receipt, selectedFinalBranchId: result.state.project.selectedFinalBranchId };
+    },
+  );
+
+  await register(
+    "export",
+    "Export branch",
+    "Render a version-checked branch locally and return a browser-local WebM artifact. No media is uploaded.",
+    jsonSchema(ExportInput),
+    async (input) => {
+      const parsed = ExportInput.parse(input);
+      const snapshot = store();
+      const branch = snapshot.editor.branches[parsed.branchId];
+      if (!branch) return toolError("BRANCH_NOT_FOUND", "Unknown branch");
+      if (branch.branchVersion !== parsed.expectedBranchVersion) {
+        return toolError("CONFLICT", `expected version ${parsed.expectedBranchVersion}, current is ${branch.branchVersion}`, { branchVersion: branch.branchVersion });
+      }
+      const renderState = await snapshot.renderExport(parsed.preset ?? "720p", { type: "agent", surface: "webmcp" }, parsed.branchId);
+      if (renderState.status !== "ready") return toolError("EXPORT_FAILED", renderState.error ?? "Local render did not complete");
+      const current = store();
+      const artifact = [...current.editor.exports].reverse().find((candidate) => candidate.branchId === parsed.branchId);
+      return {
+        exportId: artifact?.exportId,
+        branchId: parsed.branchId,
+        stateDigest: artifact?.stateDigest,
+        filename: renderState.filename,
+        mimeType: renderState.mimeType,
+        bytes: renderState.bytes,
+        width: renderState.width,
+        height: renderState.height,
+        downloadUrl: renderState.downloadUrl,
+      };
+    },
+  );
+
+  await register(
+    "publish",
+    "Publish local export",
+    "Mark a completed export as published in Cutline's local project record. This does not upload to an external destination.",
+    jsonSchema(PublishInput),
+    (input) => {
+      const parsed = PublishInput.parse(input);
+      const result = store().dispatch({
+        type: "PublishExport",
+        actor: { type: "agent", surface: "webmcp" },
+        payload: {
+          branchId: parsed.branchId,
+          expectedBranchVersion: parsed.expectedBranchVersion,
+          exportId: parsed.exportId,
+        },
+      });
+      if (!result.ok) return toolError(result.error.code, result.error.message, { branchVersion: result.error.branchVersion });
+      const artifact = result.state.exports.find((candidate) => candidate.exportId === parsed.exportId);
+      return { ...result.receipt, export: artifact };
+    },
+  );
+
+  await register(
+    "delete_project",
+    "Delete project",
+    "Delete the current browser-local project and replace it with a new empty project. Requires the latest project digest.",
+    jsonSchema(DeleteProjectInput),
+    async (input) => {
+      const parsed = DeleteProjectInput.parse(input);
+      const snapshot = store();
+      const currentDigest = digestProject(snapshot.editor);
+      if (parsed.expectedProjectDigest !== currentDigest) return toolError("CONFLICT", "expectedProjectDigest does not match the current project", { stateDigest: currentDigest });
+      const deletedProjectId = snapshot.editor.project.projectId;
+      await snapshot.newProject();
+      return {
+        deletedProjectId,
+        projectId: store().editor.project.projectId,
+        stateDigest: digestProject(store().editor),
+        summary: "Deleted the local project and created an empty workspace.",
       };
     },
   );

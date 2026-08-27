@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { sha256 } from "js-sha256";
 import { applyCommand, createEmptyState, digestBranch, digestProject, kindFromMime, parseTranscriptText, validateImport } from "@/core";
-import type { Command, EditorState, Receipt, Result, TimeRange } from "@/core/types";
+import type { Actor, Command, EditorState, Receipt, Result, TimeRange } from "@/core/types";
 import { createSeedState } from "@/demo/manifest";
 import { renderBranchLocally, type RenderPreset } from "@/media/export";
 import { inspectMediaFile } from "@/media/localMedia";
@@ -82,7 +82,7 @@ interface EditorStore {
   requestPersistentStorage: () => Promise<boolean>;
   newProject: () => Promise<void>;
   renameProject: (title: string) => void;
-  renderExport: (preset?: RenderPreset) => Promise<void>;
+  renderExport: (preset?: RenderPreset, actor?: Actor, branchId?: string) => Promise<RenderState>;
   cancelRender: () => void;
   setPlayhead: (ms: number) => void;
   setPlaying: (playing: boolean) => void;
@@ -258,6 +258,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         playheadMs: Math.min(store.playheadMs, activeBranch(result.state).durationMs),
         receipts: [result.receipt, ...store.receipts].slice(0, 40),
         lastError: null,
+        ...(command.type === "SelectActiveBranch"
+          ? { compare: { ...store.compare, enabled: false } }
+          : {}),
         ...(invalidatesRender ? { renderState: emptyRenderState() } : {}),
       }));
       persist(result.state, (saveStatus, error) => set({
@@ -271,9 +274,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         branchVersion: result.receipt.branchVersion,
         durationDeltaMs: result.receipt.durationDeltaMs,
       });
-      if (command.type === "AcceptBranch") track({ event: "human_decision", action: "accept" });
-      if (command.type === "Undo") track({ event: "human_decision", action: "undo" });
-      if (command.type === "Redo") track({ event: "human_decision", action: "redo" });
+      if (command.type === "AcceptBranch") track({ event: "decision", actorType: command.actor.type, action: "accept" });
+      if (command.type === "Undo") track({ event: "decision", actorType: command.actor.type, action: "undo" });
+      if (command.type === "Redo") track({ event: "decision", actorType: command.actor.type, action: "redo" });
       if (command.type === "RecordExport") {
         track({
           event: "export_completed",
@@ -460,12 +463,18 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     persist(editor, (saveStatus, error) => set({ saveStatus, ...(error ? { lastError: `LOCAL_SAVE: ${error}` } : {}) }));
   },
 
-  renderExport: async (preset = "720p") => {
+  renderExport: async (preset = "720p", actor = { type: "human", surface: "ui" }, branchId) => {
     const snapshot = get();
-    const branch = activeBranch(snapshot.editor);
+    const branch = branchId ? snapshot.editor.branches[branchId] : activeBranch(snapshot.editor);
+    if (!branch) {
+      const failed = { ...emptyRenderState(), status: "failed" as const, error: "Unknown branch." };
+      set({ renderState: failed });
+      return failed;
+    }
     if (!branch.durationMs) {
-      set({ renderState: { ...emptyRenderState(), status: "failed", error: "Add a clip to the timeline before rendering." } });
-      return;
+      const failed = { ...emptyRenderState(), status: "failed" as const, error: "Add a clip to the timeline before rendering." };
+      set({ renderState: failed });
+      return failed;
     }
     renderController?.abort();
     revokeRenderUrl(snapshot.renderState);
@@ -484,7 +493,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           set((store) => ({ renderState: { ...store.renderState, status: "rendering", progress } }));
         },
       });
-      if (renderController !== controller || controller.signal.aborted) return;
+      if (renderController !== controller || controller.signal.aborted) return get().renderState;
       const current = get();
       const currentBranch = current.editor.branches[branch.branchId];
       if (!currentBranch || digestBranch(currentBranch) !== expectedDigest) {
@@ -494,7 +503,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       const filename = `${safeFilename(current.editor.project.title)}-${safeFilename(branch.name)}.webm`;
       const recorded = current.dispatch({
         type: "RecordExport",
-        actor: { type: "human", surface: "ui" },
+        actor,
         payload: {
           branchId: branch.branchId,
           expectedBranchVersion: branch.branchVersion,
@@ -518,8 +527,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           error: null,
         },
       });
+      return get().renderState;
     } catch (error) {
-      if (renderController !== controller) return;
+      if (renderController !== controller) return get().renderState;
       const cancelled = error instanceof DOMException && error.name === "AbortError";
       set({
         renderState: {
@@ -528,6 +538,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           error: cancelled ? null : error instanceof Error ? error.message : "Local rendering failed",
         },
       });
+      return get().renderState;
     } finally {
       if (renderController === controller) renderController = null;
     }

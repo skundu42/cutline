@@ -14,8 +14,10 @@ test("starts as a content-agnostic local workspace", async ({ page }) => {
   const catalog = await page.getByTestId("tool-catalog").innerText();
   expect(catalog).toContain("apply_edit_batch");
   expect(catalog).toContain("place_clip");
-  expect(catalog).not.toContain("export,");
-  expect(catalog.includes(" accept_branch")).toBeFalsy();
+  expect(catalog).toContain("export");
+  expect(catalog).toContain("accept_branch");
+  expect(catalog).toContain("lock_range");
+  expect(catalog).toContain("delete_project");
 
   await page.getByRole("button", { name: "Agent", exact: true }).click();
   await expect(page.getByText("Local workspace")).toBeVisible();

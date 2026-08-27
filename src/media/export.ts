@@ -1,5 +1,18 @@
 import { getActiveClipTransition, getTransitionFrame } from "@/core";
 import type { Asset, Branch, CaptionCue, ClipInstance, EditorState } from "@/core/types";
+import {
+  ALL_FORMATS,
+  AudioBufferSink,
+  AudioBufferSource as EncodedAudioBufferSource,
+  BlobSource,
+  BufferTarget,
+  EncodedPacketSink,
+  EncodedVideoPacketSource,
+  Input,
+  Output,
+  Quality,
+  WebMOutputFormat,
+} from "mediabunny";
 
 export interface LocalRenderResult {
   blob: Blob;
@@ -27,16 +40,9 @@ interface PreparedVisual {
   video: boolean;
 }
 
-interface PreparedAudio {
-  clip: ClipInstance;
-  element: HTMLAudioElement;
-  gain: GainNode;
-  muted: boolean;
-}
-
 const MIME_CANDIDATES = [
-  "video/webm;codecs=vp9,opus",
-  "video/webm;codecs=vp8,opus",
+  "video/webm;codecs=vp9",
+  "video/webm;codecs=vp8",
   "video/webm",
 ];
 
@@ -250,28 +256,6 @@ async function prepareVisual(asset: Asset, clip: ClipInstance, container: HTMLEl
   return { clip, source: image, video: false };
 }
 
-async function prepareAudio(
-  asset: Asset,
-  clip: ClipInstance,
-  context: AudioContext,
-  destination: MediaStreamAudioDestinationNode,
-  muted: boolean,
-  container: HTMLElement,
-  signal?: AbortSignal,
-): Promise<PreparedAudio> {
-  const element = document.createElement("audio");
-  element.preload = "auto";
-  element.src = asset.uri;
-  container.appendChild(element);
-  await waitForMedia(element, signal);
-  await seekMedia(element, Math.min(clip.sourceInMs / 1000, Math.max(0, element.duration - 0.01)), signal);
-  const source = context.createMediaElementSource(element);
-  const gain = context.createGain();
-  gain.gain.value = 0;
-  source.connect(gain).connect(destination);
-  return { clip, element, gain, muted };
-}
-
 function syncVideo(entry: PreparedVisual, timeMs: number, freezeAtStart = false) {
   if (!entry.video) return;
   const video = entry.source as HTMLVideoElement;
@@ -285,16 +269,131 @@ function syncVideo(entry: PreparedVisual, timeMs: number, freezeAtStart = false)
   else if (video.paused) void video.play().catch(() => undefined);
 }
 
-function syncAudio(entry: PreparedAudio, timeMs: number) {
-  if (!isActive(entry.clip, timeMs)) {
-    entry.gain.gain.value = 0;
-    entry.element.pause();
-    return;
+async function readAudioBuffer(asset: Asset, signal?: AbortSignal): Promise<AudioBuffer | null> {
+  assertNotAborted(signal);
+  const response = await fetch(asset.uri, { signal });
+  if (!response.ok) throw new Error(`Could not read ${asset.label} for local audio rendering`);
+  const input = new Input({ source: new BlobSource(await response.blob()), formats: ALL_FORMATS });
+  try {
+    const track = await input.getPrimaryAudioTrack();
+    if (!track) return null;
+    const chunks = [] as Awaited<ReturnType<AudioBufferSink["getBuffer"]>>[];
+    const sink = new AudioBufferSink(track);
+    let sampleRate = 0;
+    let channelCount = 0;
+    let duration = 0;
+    for await (const chunk of sink.buffers()) {
+      assertNotAborted(signal);
+      chunks.push(chunk);
+      sampleRate ||= chunk.buffer.sampleRate;
+      channelCount = Math.max(channelCount, chunk.buffer.numberOfChannels);
+      duration = Math.max(duration, chunk.timestamp + chunk.duration);
+    }
+    if (!chunks.length || !sampleRate || !channelCount || !duration) return null;
+    const factory = new OfflineAudioContext(channelCount, 1, sampleRate);
+    const combined = factory.createBuffer(channelCount, Math.ceil(duration * sampleRate), sampleRate);
+    for (const chunk of chunks) {
+      if (!chunk || chunk.buffer.sampleRate !== sampleRate) throw new Error(`${asset.label} changed sample rate during decoding`);
+      const offset = Math.max(0, Math.round(chunk.timestamp * sampleRate));
+      const available = Math.max(0, combined.length - offset);
+      for (let channel = 0; channel < channelCount; channel += 1) {
+        const sourceChannel = Math.min(channel, chunk.buffer.numberOfChannels - 1);
+        combined.getChannelData(channel).set(chunk.buffer.getChannelData(sourceChannel).subarray(0, available), offset);
+      }
+    }
+    return combined;
+  } finally {
+    input.dispose();
   }
-  const expected = (entry.clip.sourceInMs + timeMs - entry.clip.startMs) / 1000;
-  if (Math.abs(entry.element.currentTime - expected) > 0.18) entry.element.currentTime = expected;
-  entry.gain.gain.value = entry.muted ? 0 : Math.max(0, Math.min(2, (entry.clip.gain ?? 1) * transitionEnvelope(entry.clip, timeMs)));
-  if (entry.element.paused) void entry.element.play().catch(() => undefined);
+}
+
+async function mixBranchAudio(editor: EditorState, branch: Branch, signal?: AbortSignal): Promise<AudioBuffer | null> {
+  const entries = branch.tracks
+    .filter((track) => track.kind === "audio" && !track.muted)
+    .flatMap((track) => track.items.map((clip) => ({ clip, track })));
+  if (!entries.length) return null;
+  if (typeof OfflineAudioContext === "undefined") throw new Error("Offline audio rendering is unavailable in this browser");
+
+  const decoded = new Map<string, Promise<AudioBuffer | null>>();
+  for (const { clip } of entries) {
+    if (!decoded.has(clip.assetId)) decoded.set(clip.assetId, readAudioBuffer(assetFor(editor, clip.assetId), signal));
+  }
+
+  const sampleRate = 48_000;
+  const context = new OfflineAudioContext(2, Math.ceil(branch.durationMs / 1000 * sampleRate), sampleRate);
+  let scheduled = 0;
+  for (const { clip } of entries) {
+    assertNotAborted(signal);
+    const buffer = await decoded.get(clip.assetId)!;
+    if (!buffer) continue;
+    const offset = clip.sourceInMs / 1000;
+    const start = clip.startMs / 1000;
+    const duration = Math.min(
+      (clip.endMs - clip.startMs) / 1000,
+      Math.max(0, buffer.duration - offset),
+      Math.max(0, branch.durationMs / 1000 - start),
+    );
+    if (duration <= 0) continue;
+    const end = start + duration;
+    const level = Math.max(0, Math.min(2, clip.gain ?? 1));
+    const fade = Math.min(duration / 2, (clip.fadeMs ?? 0) / 1000);
+    const fadesIn = ["fade_in", "crossfade", "dissolve"].includes(clip.transitionIn ?? "") && fade > 0;
+    const fadesOut = ["fade_out", "crossfade", "dissolve"].includes(clip.transitionOut ?? "") && fade > 0;
+    const source = context.createBufferSource();
+    const gain = context.createGain();
+    source.buffer = buffer;
+    source.connect(gain).connect(context.destination);
+    gain.gain.setValueAtTime(fadesIn ? 0 : level, start);
+    if (fadesIn) gain.gain.linearRampToValueAtTime(level, start + fade);
+    if (fadesOut) {
+      gain.gain.setValueAtTime(level, end - fade);
+      gain.gain.linearRampToValueAtTime(0, end);
+    }
+    source.start(start, offset, duration);
+    scheduled += 1;
+  }
+  if (!scheduled) return null;
+  assertNotAborted(signal);
+  return context.startRendering();
+}
+
+async function muxRenderedAudio(videoBlob: Blob, audio: AudioBuffer | null, signal?: AbortSignal) {
+  if (!audio) return { blob: videoBlob, mimeType: videoBlob.type || "video/webm" };
+  assertNotAborted(signal);
+  const input = new Input({ source: new BlobSource(videoBlob), formats: ALL_FORMATS });
+  try {
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) throw new Error("The local video render did not contain a video track");
+    const codec = await track.getCodec();
+    if (!codec) throw new Error("The local video codec could not be identified");
+    const decoderConfig = await track.getDecoderConfig();
+    const target = new BufferTarget();
+    const output = new Output({ format: new WebMOutputFormat(), target });
+    const videoSource = new EncodedVideoPacketSource(codec);
+    const audioSource = new EncodedAudioBufferSource({ codec: "opus", quality: new Quality({ bitrate: 192_000 }) });
+    output.addVideoTrack(videoSource);
+    output.addAudioTrack(audioSource);
+    await output.start();
+    const sink = new EncodedPacketSink(track);
+    let firstPacket = true;
+    await Promise.all([
+      (async () => {
+        for await (const packet of sink.packets()) {
+          assertNotAborted(signal);
+          await videoSource.add(packet, firstPacket && decoderConfig ? { decoderConfig } : undefined);
+          firstPacket = false;
+        }
+      })(),
+      audioSource.add(audio),
+    ]);
+    assertNotAborted(signal);
+    await output.finalize();
+    if (!target.buffer) throw new Error("The local render could not be finalized");
+    const mimeType = await output.getMimeType();
+    return { blob: new Blob([target.buffer], { type: mimeType }), mimeType };
+  } finally {
+    input.dispose();
+  }
 }
 
 export async function renderBranchLocally({ editor, branch, preset = "720p", signal, onProgress }: RenderOptions): Promise<LocalRenderResult> {
@@ -324,11 +423,7 @@ export async function renderBranchLocally({ editor, branch, preset = "720p", sig
   });
   document.body.appendChild(mediaContainer);
 
-  const audioContext = new AudioContext();
-  await audioContext.resume();
-  const audioDestination = audioContext.createMediaStreamDestination();
   const visuals: PreparedVisual[] = [];
-  const audioEntries: PreparedAudio[] = [];
   let renderStream: MediaStream | null = null;
 
   try {
@@ -339,23 +434,13 @@ export async function renderBranchLocally({ editor, branch, preset = "720p", sig
         visuals.push(await prepareVisual(assetFor(editor, clip.assetId), clip, mediaContainer, signal));
       }
     }
-    const audioTracks = branch.tracks.filter((track) => track.kind === "audio");
-    for (const track of audioTracks) {
-      for (const clip of track.items) {
-        assertNotAborted(signal);
-        audioEntries.push(await prepareAudio(assetFor(editor, clip.assetId), clip, audioContext, audioDestination, track.muted, mediaContainer, signal));
-      }
-    }
+    const mixedAudio = await mixBranchAudio(editor, branch, signal);
 
     const canvasStream = canvas.captureStream(editor.project.frameRate);
-    renderStream = new MediaStream([
-      ...canvasStream.getVideoTracks(),
-      ...audioDestination.stream.getAudioTracks(),
-    ]);
+    renderStream = new MediaStream(canvasStream.getVideoTracks());
     const recorder = new MediaRecorder(renderStream, {
       mimeType,
       videoBitsPerSecond: preset === "480p" ? 2_500_000 : 5_000_000,
-      audioBitsPerSecond: 192_000,
     });
     const chunks: BlobPart[] = [];
     recorder.ondataavailable = (event) => {
@@ -420,7 +505,6 @@ export async function renderBranchLocally({ editor, branch, preset = "720p", sig
           if (incoming) drawVisual(incoming, timeMs, frame.incoming, true);
         }
       }
-      for (const entry of audioEntries) syncAudio(entry, timeMs);
       const cue = branch.captions.find((candidate) => timeMs >= candidate.startMs && timeMs < candidate.endMs);
       if (cue) drawCaption(context, cue, branch, output);
     };
@@ -437,7 +521,7 @@ export async function renderBranchLocally({ editor, branch, preset = "720p", sig
           }
           const elapsedMs = Math.min(branch.durationMs, now - startedAt);
           drawFrame(elapsedMs);
-          onProgress?.(elapsedMs / branch.durationMs);
+          onProgress?.(elapsedMs / branch.durationMs * 0.95);
           if (elapsedMs >= branch.durationMs) {
             resolve();
             return;
@@ -454,10 +538,12 @@ export async function renderBranchLocally({ editor, branch, preset = "720p", sig
     await new Promise((resolve) => window.setTimeout(resolve, 120));
     recorder.stop();
     await stopped;
+    const recordedVideo = new Blob(chunks, { type: mimeType });
+    const muxed = await muxRenderedAudio(recordedVideo, mixedAudio, signal);
     onProgress?.(1);
     return {
-      blob: new Blob(chunks, { type: mimeType }),
-      mimeType,
+      blob: muxed.blob,
+      mimeType: muxed.mimeType,
       extension: "webm",
       ...output,
     };
@@ -465,9 +551,7 @@ export async function renderBranchLocally({ editor, branch, preset = "720p", sig
     for (const entry of visuals) {
       if (entry.video) (entry.source as HTMLVideoElement).pause();
     }
-    for (const entry of audioEntries) entry.element.pause();
     renderStream?.getTracks().forEach((track) => track.stop());
     mediaContainer.remove();
-    await audioContext.close().catch(() => undefined);
   }
 }

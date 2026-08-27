@@ -333,9 +333,9 @@ export function Workspace() {
               <CommentForm />
               {branch.comments.length ? <ul className="comment-list">{branch.comments.map((comment) => <li key={comment.commentId} className={`comment-card is-${comment.status}`}>
                 <button className="comment-jump" onClick={() => { setPlayhead(comment.range.startMs); setSelectedRange(comment.range); }}><span>{comment.text}</span><small>{formatTimecode(comment.range.startMs)}–{formatTimecode(comment.range.endMs)}</small></button>
-                <div className="comment-meta"><span>{comment.authorType === "agent" ? "Codex" : "Creator"}</span><span>{comment.status}</span></div>
+                <div className="comment-meta"><span>{comment.authorType === "agent" ? "Agent" : "User"}</span><span>{comment.status}</span></div>
                 {comment.resolutionProposal ? <div className="resolution-proposal"><strong>Proposed resolution</strong><p>{comment.resolutionProposal}</p></div> : null}
-                {comment.status !== "resolved" ? <button className="comment-resolve" onClick={() => dispatch({ type: "ProposeCommentResolution", actor: { type: "human", surface: "ui" }, payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, commentId: comment.commentId, proposal: comment.resolutionProposal ?? "Resolved by creator" } })}>{comment.resolutionProposal ? "Accept resolution" : "Mark resolved"}</button> : null}
+                {comment.status !== "resolved" ? <button className="comment-resolve" onClick={() => dispatch({ type: "ProposeCommentResolution", actor: { type: "human", surface: "ui" }, payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, commentId: comment.commentId, proposal: comment.resolutionProposal ?? "Resolved by user" } })}>Mark resolved</button> : null}
               </li>)}</ul> : <div className="agent-empty"><Icon name="plus" size={22} /><p>No comments yet</p><span>Select a range or move the playhead, then leave a precise note.</span></div>}
             </section> : null}
 

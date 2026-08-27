@@ -80,7 +80,7 @@ export function ExportModal() {
           <button ref={closeRef} className="icon-button" onClick={() => setExportOpen(false)} aria-label="Close render dialog"><CloseIcon /></button>
         </header>
 
-        <div className="human-gate"><span aria-hidden="true">L</span><div><strong>Rendered entirely on this device</strong><p id="export-description">Cutline composites the current timeline in your browser. Original clips and the finished file are never uploaded.</p></div></div>
+        <div className="local-render-note"><span aria-hidden="true">L</span><div><strong>Rendered entirely on this device</strong><p id="export-description">Cutline composites the current timeline in your browser. Original clips and the finished file are never uploaded.</p></div></div>
 
         <div className="export-summary">
           <div className="export-preview"><div className={`export-frame ratio-${branch.crop.aspectRatio.replace(":", "-")}`}><span>720p</span><small>{branch.crop.aspectRatio}</small></div></div>

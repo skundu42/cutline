@@ -1,0 +1,20 @@
+{
+  "name": "cutline-webmcp-demo-clips",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "serve": "vite --host 127.0.0.1 --port 9000",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@motion-canvas/2d": "3.17.2",
+    "@motion-canvas/core": "3.17.2"
+  },
+  "devDependencies": {
+    "@motion-canvas/ffmpeg": "3.17.2",
+    "@motion-canvas/ui": "3.17.2",
+    "@motion-canvas/vite-plugin": "3.17.2",
+    "typescript": "^5.9.2",
+    "vite": "^5.4.19"
+  }
+}

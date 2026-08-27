@@ -23,7 +23,6 @@ import type {
   Warning,
 } from "./types";
 
-const HUMAN_ONLY: Command["type"][] = ["ImportTranscript", "SetLock", "AcceptBranch", "RecordExport", "ResetProject"];
 const BRANCH_WRITES: Command["type"][] = [
   "ApplyEditBatch",
   "StyleCaptions",
@@ -50,16 +49,6 @@ function fail(error: CommandError): Result {
 
 function getBranch(state: EditorState, branchId: string): Branch | undefined {
   return state.branches[branchId];
-}
-
-function requireHuman(command: Command): CommandError | null {
-  if (HUMAN_ONLY.includes(command.type) && command.actor.type !== "human") {
-    return {
-      code: "UNAUTHORIZED",
-      message: `${command.type} is human-only`,
-    };
-  }
-  return null;
 }
 
 function requireWritableBranch(state: EditorState, command: Command): CommandError | null {
@@ -769,8 +758,6 @@ export function readMappedTranscript(state: EditorState, branchId: string) {
 }
 
 export function applyCommand(state: EditorState, command: Command, ctx: BusContext): Result {
-  const unauthorized = requireHuman(command);
-  if (unauthorized) return fail(unauthorized);
   const unwritable = requireWritableBranch(state, command);
   if (unwritable) return fail(unwritable);
 
@@ -1133,38 +1120,42 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
       } else if (command.type === "ProposeCommentResolution") {
         const comment = branch.comments.find((c) => c.commentId === command.payload.commentId);
         if (!comment) throw Object.assign(new Error("comment"), { code: "VALIDATION_ERROR" });
-        if (command.actor.type === "agent" && comment.authorType === "human") {
-          comment.resolutionProposal = command.payload.proposal;
-          comment.status = "proposed";
-        } else if (command.actor.type === "human") {
-          comment.status = "resolved";
-        } else {
-          throw Object.assign(new Error("cannot delete human comments"), { code: "UNAUTHORIZED" });
-        }
+        comment.resolutionProposal = command.payload.proposal;
+        comment.status = "resolved";
         const operationId = ctx.id();
         bump(branch, operationId);
-        receipt = receiptFor(ctx, branch, draft, "Updated comment.", { operationId, changedRanges: [comment.range] });
+        receipt = receiptFor(ctx, branch, draft, "Resolved comment.", { operationId, changedRanges: [comment.range] });
       } else if (command.type === "SetLock") {
+        let changedRange: TimeRange | null = null;
         if (command.payload.action === "lock") {
+          if (!isValidRange(command.payload.range) || command.payload.range.endMs > branch.durationMs) {
+            throw Object.assign(new Error("Lock range must be ordered and within the branch duration"), { code: "INVALID_RANGE" });
+          }
           branch.locks.push({
             lockId: ctx.id(),
             startMs: command.payload.range.startMs,
             endMs: command.payload.range.endMs,
             label: command.payload.label,
-            createdByHumanAt: ctx.now(),
+            createdAt: ctx.now(),
+            createdBy: command.actor.type,
           });
+          changedRange = command.payload.range;
         } else if (command.payload.action === "unlock") {
           const lockId = command.payload.lockId;
+          const existing = branch.locks.find((lock) => lock.lockId === lockId);
+          if (!existing) throw Object.assign(new Error("Unknown lock"), { code: "VALIDATION_ERROR" });
+          changedRange = { startMs: existing.startMs, endMs: existing.endMs };
           branch.locks = branch.locks.filter((lock) => lock.lockId !== lockId);
         }
         const operationId = ctx.id();
+        if (!changedRange) throw Object.assign(new Error("Lock change did not resolve a range"), { code: "VALIDATION_ERROR" });
         bump(branch, operationId);
         receipt = receiptFor(
           ctx,
           branch,
           draft,
           command.payload.action === "lock" ? "Protected a range." : "Removed a lock.",
-          { operationId },
+          { operationId, changedRanges: [{ ...changedRange, changes: [command.payload.action === "lock" ? "lock_range" : "unlock_range"] }] },
         );
       } else if (command.type === "AcceptBranch") {
         for (const candidate of Object.values(draft.branches)) {
@@ -1187,6 +1178,16 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
           bytes: command.payload.bytes,
         });
         receipt = receiptFor(ctx, branch, draft, "Export recorded.", {
+          changedRanges: [],
+        });
+      } else if (command.type === "PublishExport") {
+        const artifact = draft.exports.find((candidate) => candidate.exportId === command.payload.exportId);
+        if (!artifact || artifact.branchId !== branch.branchId) {
+          throw Object.assign(new Error("Unknown export for this branch"), { code: "VALIDATION_ERROR" });
+        }
+        artifact.publishedAt = ctx.now();
+        artifact.publishedBy = command.actor.type;
+        receipt = receiptFor(ctx, branch, draft, "Published local export.", {
           changedRanges: [],
         });
       } else if (command.type === "PlaceClip") {
@@ -1318,7 +1319,7 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
         throw Object.assign(new Error("unsupported"), { code: "UNSUPPORTED_OPERATION" });
       }
 
-      if (command.type !== "AcceptBranch" && command.type !== "RecordExport") {
+      if (command.type !== "AcceptBranch" && command.type !== "RecordExport" && command.type !== "PublishExport") {
         pushHistory(draft, branch.branchId, receipt.operationId, before, structuredClone(current(branch)));
       }
       pushEvent(draft, ctx, command, receipt);

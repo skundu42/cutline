@@ -288,7 +288,7 @@ describe("locks", () => {
     expect(result.state.branches[SOURCE_BRANCH_ID].locks[0].startMs).toBe(18000);
   });
 
-  it("rejects agent lock attempts", () => {
+  it("lets agents create and remove locks", () => {
     const result = applyCommand(
       createSeedState(),
       {
@@ -299,14 +299,28 @@ describe("locks", () => {
           branchId: SOURCE_BRANCH_ID,
           expectedBranchVersion: 0,
           range: { startMs: 0, endMs: 1000 },
-          label: "nope",
+          label: "Agent lock",
         },
       },
       ctx(),
     );
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error.code).toBe("UNAUTHORIZED");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const lock = result.state.branches[SOURCE_BRANCH_ID].locks[0];
+    expect(lock).toMatchObject({ label: "Agent lock", createdBy: "agent" });
+
+    const unlocked = applyCommand(result.state, {
+      type: "SetLock",
+      actor: { type: "agent", surface: "webmcp" },
+      payload: {
+        action: "unlock",
+        branchId: SOURCE_BRANCH_ID,
+        expectedBranchVersion: 1,
+        lockId: lock.lockId,
+      },
+    }, ctx());
+    expect(unlocked.ok).toBe(true);
+    if (unlocked.ok) expect(unlocked.state.branches[SOURCE_BRANCH_ID].locks).toHaveLength(0);
   });
 });
 

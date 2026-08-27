@@ -3,11 +3,14 @@ export const P0_TOOL_NAMES = [
   "inspect_project",
   "get_timeline",
   "read_transcript",
+  "import_transcript",
   "get_comments",
   "select_branch",
   "control_playback",
   "add_comment",
   "propose_comment_resolution",
+  "lock_range",
+  "unlock_range",
   "create_cut_branch",
   "apply_edit_batch",
   "style_captions",
@@ -25,15 +28,10 @@ export const P0_TOOL_NAMES = [
   "set_crop",
   "preview_range",
   "compare_cuts",
-  "undo_edit",
-  "redo_edit",
-] as const;
-
-export const HUMAN_ONLY_ABSENT = [
-  "lock_range",
-  "unlock_range",
   "accept_branch",
   "export",
   "publish",
   "delete_project",
-];
+  "undo_edit",
+  "redo_edit",
+] as const;

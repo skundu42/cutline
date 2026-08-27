@@ -1,5 +1,5 @@
 # Dependencies and package-manager state
-/node_modules
+node_modules/
 /.pnp
 .pnp.*
 /.npm
@@ -23,8 +23,8 @@
 *storage-state*.json
 
 # Generated visual artifacts
-/output
-/screenshots
+output/
+screenshots/
 
 # Next.js, build output, and caches
 /.next/
