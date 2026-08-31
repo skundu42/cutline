@@ -4,6 +4,7 @@ import { digestBranch, digestProject } from "./digest";
 import { ensureStandardTracks, validateImport } from "./import";
 import { allowsOverlap, collectInvariantViolations, recomputeDuration } from "./invariants";
 import { isValidRange, rangeDuration, rangesIntersect } from "./time";
+import { linkedItems, placementConflicts } from "./linked";
 import { DEFAULT_TRANSITION_DURATION_MS } from "./transitions";
 import type {
   BasicClipTransition,
@@ -93,6 +94,21 @@ function lockHits(branch: Branch, ranges: TimeRange[]): LockedRangeHit | null {
 interface LockedRangeHit {
   lockId: string;
   range: TimeRange;
+}
+
+function lockedRangeError(hit: LockedRangeHit) {
+  return Object.assign(new Error("locked range"), {
+    code: "LOCKED_RANGE" satisfies CommandError["code"],
+    lockId: hit.lockId,
+  });
+}
+
+function skippedLockedOperation(op: EditOp["op"], hit: LockedRangeHit, message: string) {
+  return {
+    skipped: { op, reason: "LOCKED_RANGE" },
+    warning: { code: "LOCKED_RANGE", message, lockId: hit.lockId, range: hit.range },
+    changed: [] as ChangedRange[],
+  };
 }
 
 function bump(branch: Branch, operationId: string) {
@@ -247,6 +263,7 @@ function buildPlacedItem(
     transitionIn?: Transition;
     transitionOut?: Transition;
     fadeMs?: number;
+    linkGroupId?: string | null;
   },
 ): ClipInstance {
   const asset = state.assets.find((item) => item.assetId === opts.assetId);
@@ -273,6 +290,7 @@ function buildPlacedItem(
     transitionIn: opts.transitionIn,
     transitionOut: opts.transitionOut,
     fadeMs: opts.fadeMs,
+    linkGroupId: opts.linkGroupId,
   };
   if (asset.durationMs && item.sourceOutMs > asset.durationMs && (asset.kind === "video" || asset.kind === "audio")) {
     item.sourceOutMs = asset.durationMs;
@@ -293,7 +311,8 @@ function placeOnTrack(
     throw Object.assign(new Error("unknown track"), { code: "INVARIANT_VIOLATION" });
   }
   const range = { startMs: item.startMs, endMs: item.endMs };
-  const hit = lockHits(branch, [range]);
+  const replaced = replaceExisting ? placementConflicts(branch, [item.trackId], range) : [];
+  const hit = lockHits(branch, [range, ...replaced]);
   if (hit) {
     if (required) {
       throw Object.assign(new Error("locked range"), {
@@ -304,14 +323,18 @@ function placeOnTrack(
     return [];
   }
   if (replaceExisting) {
-    track.items = track.items.filter((existing) => !rangesIntersect(existing, range));
+    const removedIds = new Set(replaced.map((existing) => existing.itemId));
+    for (const affectedTrack of branch.tracks) affectedTrack.items = affectedTrack.items.filter((existing) => !removedIds.has(existing.itemId));
   } else if (!allowsOverlap(track) && track.items.some((existing) => rangesIntersect(existing, range))) {
     throw Object.assign(new Error(`${track.trackId} overlap`), { code: "INVARIANT_VIOLATION" });
   }
   track.items.push(item);
   track.items.sort((a, b) => a.startMs - b.startMs);
   branch.durationMs = recomputeDuration(branch);
-  return [{ startMs: item.startMs, endMs: item.endMs, changes: [change] }];
+  return [
+    ...replaced.map((existing) => ({ startMs: existing.startMs, endMs: existing.endMs, changes: ["delete"] })),
+    { startMs: item.startMs, endMs: item.endMs, changes: [change] },
+  ];
 }
 
 function shiftRange<T extends { startMs: number; endMs: number }>(
@@ -481,6 +504,7 @@ function applyOp(
       throw Object.assign(new Error("unknown track"), { code: "INVARIANT_VIOLATION" satisfies CommandError["code"] });
     }
     rippleDelete(branch, op.range, ctx.id);
+    const linkGroupId = op.trackId === "v1" ? ctx.id() : undefined;
     const makeItem = (trackId: string): ClipInstance => ({
       itemId: ctx.id(),
       assetId: op.assetId,
@@ -492,6 +516,7 @@ function applyOp(
       label: op.assetId,
       transitionIn: op.transition,
       transitionOut: op.transition,
+      linkGroupId,
     });
     const item = makeItem(op.trackId);
     const newIds = new Set<string>([item.itemId]);
@@ -565,6 +590,11 @@ function applyOp(
     if (!found || op.atMs <= found.item.startMs || op.atMs >= found.item.endMs) {
       throw Object.assign(new Error("invalid split"), { code: "INVALID_RANGE" satisfies CommandError["code"] });
     }
+    const hit = lockHits(branch, [{ startMs: op.atMs, endMs: Math.min(found.item.endMs, op.atMs + 1) }]);
+    if (hit) {
+      if (required) throw lockedRangeError(hit);
+      return skippedLockedOperation(op.op, hit, "Skipped a split inside a protected range.");
+    }
     const offset = op.atMs - found.item.startMs;
     const right: ClipInstance = {
       ...found.item,
@@ -599,7 +629,8 @@ function applyOp(
     };
     const trimLock = lockHits(branch, [trimChanged]);
     if (trimLock) {
-      throw Object.assign(new Error("locked range"), { code: "LOCKED_RANGE" satisfies CommandError["code"], lockId: trimLock.lockId });
+      if (required) throw lockedRangeError(trimLock);
+      return skippedLockedOperation(op.op, trimLock, "Skipped a trim that intersects a protected range.");
     }
     const deltaIn = startMs - found.item.startMs;
     const deltaOut = found.item.endMs - endMs;
@@ -608,7 +639,7 @@ function applyOp(
     found.item.sourceInMs += deltaIn;
     found.item.sourceOutMs -= deltaOut;
     branch.durationMs = recomputeDuration(branch);
-    return { changed: [{ startMs, endMs, changes: ["trim"] }] };
+    return { changed: [{ ...trimChanged, changes: ["trim"] }] };
   }
 
   if (op.op === "delete") {
@@ -618,11 +649,9 @@ function applyOp(
     }
     const changed = [{ startMs: found.item.startMs, endMs: found.item.endMs, changes: ["delete"] }];
     const hit = lockHits(branch, changed);
-    if (hit && required) {
-      throw Object.assign(new Error("locked range"), {
-        code: "LOCKED_RANGE" satisfies CommandError["code"],
-        lockId: hit.lockId,
-      });
+    if (hit) {
+      if (required) throw lockedRangeError(hit);
+      return skippedLockedOperation(op.op, hit, "Skipped deleting a clip in a protected range.");
     }
     found.track.items.splice(found.index, 1);
     branch.durationMs = recomputeDuration(branch);
@@ -641,25 +670,30 @@ function applyOp(
     };
     const moveLock = lockHits(branch, [moveChanged]);
     if (moveLock) {
-      throw Object.assign(new Error("locked range"), { code: "LOCKED_RANGE" satisfies CommandError["code"], lockId: moveLock.lockId });
+      if (required) throw lockedRangeError(moveLock);
+      return skippedLockedOperation(op.op, moveLock, "Skipped a move that intersects a protected range.");
     }
     found.item.startMs = op.startMs;
     found.item.endMs = op.startMs + dur;
     found.track.items.sort((a, b) => a.startMs - b.startMs);
     branch.durationMs = recomputeDuration(branch);
-    return { changed: [{ startMs: op.startMs, endMs: op.startMs + dur, changes: ["move"] }] };
+    return { changed: [{ ...moveChanged, changes: ["move"] }] };
   }
 
   if (op.op === "place_clip") {
     const assetErr = assetCheck(state, op.assetId);
     if (assetErr) throw Object.assign(new Error(assetErr.message), { code: assetErr.code });
+    const linkGroupId = op.trackId === "v1" ? ctx.id() : undefined;
     const item = buildPlacedItem(state, branch, ctx, {
       assetId: op.assetId,
       trackId: op.trackId,
       startMs: op.startMs,
       durationMs: op.durationMs,
       sourceInMs: op.sourceInMs,
+      linkGroupId,
     });
+    const hit = lockHits(branch, [{ startMs: item.startMs, endMs: item.endMs }]);
+    if (hit && !required) return skippedLockedOperation(op.op, hit, "Skipped placing a clip in a protected range.");
     const changed = placeOnTrack(branch, item, false, required, "place_clip");
     const asset = state.assets.find((candidate) => candidate.assetId === op.assetId);
     if (changed.length && op.trackId === "v1" && asset?.kind === "video" && asset.hasAudio !== false) {
@@ -670,6 +704,7 @@ function applyOp(
         durationMs: item.endMs - item.startMs,
         sourceInMs: op.sourceInMs,
         gain: 1,
+        linkGroupId,
       });
       changed.push(...placeOnTrack(branch, audioItem, false, required, "place_linked_audio"));
     }
@@ -687,12 +722,20 @@ function applyOp(
       sourceInMs: op.sourceInMs,
       gain: op.gain,
     });
+    const hit = lockHits(branch, [{ startMs: item.startMs, endMs: item.endMs }]);
+    if (hit && !required) return skippedLockedOperation(op.op, hit, "Skipped placing audio in a protected range.");
     return { changed: placeOnTrack(branch, item, false, required, "place_audio") };
   }
 
   if (op.op === "set_transition") {
+    const found = findItem(branch, op.itemId);
+    if (!found) throw Object.assign(new Error("unknown item"), { code: "INVARIANT_VIOLATION" });
+    const hit = lockHits(branch, [{ startMs: found.item.startMs, endMs: found.item.endMs }]);
+    if (hit) {
+      if (required) throw lockedRangeError(hit);
+      return skippedLockedOperation(op.op, hit, "Skipped changing a transition in a protected range.");
+    }
     applyTransition(branch, op.itemId, op.transitionIn, op.transitionOut, op.fadeMs);
-    const found = findItem(branch, op.itemId)!;
     return { changed: [{ startMs: found.item.startMs, endMs: found.item.endMs, changes: ["set_transition"] }] };
   }
 
@@ -714,17 +757,119 @@ function applyOp(
   }
 
   if (op.op === "set_gain") {
+    const found = findItem(branch, op.itemId);
+    if (!found) throw Object.assign(new Error("unknown item"), { code: "INVARIANT_VIOLATION" });
+    const hit = lockHits(branch, [{ startMs: found.item.startMs, endMs: found.item.endMs }]);
+    if (hit) {
+      if (required) throw lockedRangeError(hit);
+      return skippedLockedOperation(op.op, hit, "Skipped changing gain in a protected range.");
+    }
     applyGain(branch, op.itemId, op.gain);
-    const found = findItem(branch, op.itemId)!;
     return { changed: [{ startMs: found.item.startMs, endMs: found.item.endMs, changes: ["set_gain"] }] };
   }
 
   if (op.op === "mute_track") {
+    const hit = lockHits(branch, [{ startMs: 0, endMs: branch.durationMs }]);
+    if (hit) {
+      if (required) throw lockedRangeError(hit);
+      return skippedLockedOperation(op.op, hit, "Skipped muting a track that contains protected material.");
+    }
     applyMute(branch, op.trackId, op.muted);
     return { changed: [{ startMs: 0, endMs: branch.durationMs, changes: ["mute_track"] }] };
   }
 
+  if (op.op === "set_link") {
+    if (op.itemIds.length < 1 || op.itemIds.length > 20) throw Object.assign(new Error("Choose between 1 and 20 clips to update linking"), { code: "VALIDATION_ERROR" });
+    if (op.linked && op.itemIds.length < 2) throw Object.assign(new Error("Choose at least two clips to link"), { code: "VALIDATION_ERROR" });
+    const found = op.itemIds.map((itemId) => findItem(branch, itemId));
+    if (found.some((item) => !item)) throw Object.assign(new Error("unknown item"), { code: "INVARIANT_VIOLATION" });
+    const ranges = found.map((item) => ({ startMs: item!.item.startMs, endMs: item!.item.endMs }));
+    const hit = lockHits(branch, ranges);
+    if (hit) {
+      if (required) throw lockedRangeError(hit);
+      return skippedLockedOperation(op.op, hit, "Skipped changing clip links in a protected range.");
+    }
+    const groupId = op.linked ? ctx.id() : null;
+    for (const item of found) item!.item.linkGroupId = groupId;
+    return { changed: ranges.map((range) => ({ ...range, changes: [op.linked ? "link_clips" : "unlink_clips"] })) };
+  }
+
   throw Object.assign(new Error("unsupported"), { code: "UNSUPPORTED_OPERATION" satisfies CommandError["code"] });
+}
+
+type LinkedEdit = Extract<EditOp, { op: "split" | "move" | "trim" | "delete" }>;
+type OpResult = ReturnType<typeof applyOp>;
+type LinkedEcho = { operation: LinkedEdit; result: OpResult };
+
+function applyLinkedOp(state: EditorState, branch: Branch, op: EditOp, ctx: BusContext, echoes: Map<string, LinkedEcho>): OpResult {
+  if (op.op !== "split" && op.op !== "move" && op.op !== "trim" && op.op !== "delete") {
+    if (["set_link", "ripple_delete", "replace_range", "extend_still"].includes(op.op)) echoes.clear();
+    return applyOp(state, branch, op, ctx);
+  }
+  const key = `${op.op}:${op.itemId}`;
+  const echo = echoes.get(key);
+  if (echo) {
+    const expected = echo.operation;
+    const currentItem = findItem(branch, op.itemId)?.item;
+    const stillEquivalent = echo.result.skipped || op.op === "delete" || (currentItem && (
+      (expected.op === "split" && currentItem.endMs === expected.atMs)
+      || (expected.op === "move" && Math.abs(currentItem.startMs - expected.startMs) < 0.001)
+      || (expected.op === "trim" && Math.abs(currentItem.startMs - expected.startMs!) < 0.001 && Math.abs(currentItem.endMs - expected.endMs!) < 0.001)
+    ));
+    const matches = op.op === "delete"
+      || (op.op === "split" && expected.op === "split" && op.atMs === expected.atMs)
+      || (op.op === "move" && expected.op === "move" && Math.abs(op.startMs - expected.startMs) < 0.001)
+      || (op.op === "trim" && expected.op === "trim"
+        && (op.startMs === undefined || Math.abs(op.startMs - expected.startMs!) < 0.001)
+        && (op.endMs === undefined || Math.abs(op.endMs - expected.endMs!) < 0.001));
+    if (!matches || !stillEquivalent) throw Object.assign(new Error("Conflicting edits target linked clips. Unlink them before editing independently."), { code: "VALIDATION_ERROR" });
+    echoes.delete(key);
+    if (echo.result.skipped && op.required !== false) {
+      throw Object.assign(new Error("A linked clip is protected"), { code: "LOCKED_RANGE", lockId: echo.result.warning?.lockId });
+    }
+    return { ...echo.result, changed: [] };
+  }
+
+  const members = linkedItems(branch, op.itemId).map((item) => ({ ...item }));
+  const anchor = members.find((item) => item.itemId === op.itemId);
+  if (!anchor) return applyOp(state, branch, op, ctx);
+  const operations: LinkedEdit[] = members.map((item) => {
+    if (op.op === "move") return { ...op, itemId: item.itemId, startMs: item.startMs + op.startMs - anchor.startMs };
+    if (op.op === "trim") return { ...op, itemId: item.itemId,
+      startMs: item.startMs + (op.startMs ?? anchor.startMs) - anchor.startMs,
+      endMs: item.endMs + (op.endMs ?? anchor.endMs) - anchor.endMs };
+    return { ...op, itemId: item.itemId };
+  });
+  const ranges = operations.map((operation, index) => {
+    const item = members[index];
+    if (operation.op === "split") return { startMs: operation.atMs, endMs: operation.atMs + 1 };
+    if (operation.op === "move") return { startMs: Math.min(item.startMs, operation.startMs), endMs: Math.max(item.endMs, operation.startMs + item.endMs - item.startMs) };
+    if (operation.op === "trim") return { startMs: Math.min(item.startMs, operation.startMs!), endMs: Math.max(item.endMs, operation.endMs!) };
+    return { startMs: item.startMs, endMs: item.endMs };
+  });
+  const hit = lockHits(branch, ranges);
+  let result: OpResult;
+  if (hit) {
+    if (op.required !== false) throw lockedRangeError(hit);
+    result = skippedLockedOperation(op.op, hit, "Skipped the entire linked edit because a clip is protected.");
+  } else {
+    const priorIds = new Set(branch.tracks.flatMap((track) => track.items.map((item) => item.itemId)));
+    result = { changed: operations.flatMap((operation) => applyOp(state, branch, { ...operation, required: true }, ctx).changed) };
+    if (op.op === "split" && (members.length > 1 || anchor.linkGroupId)) {
+      const leftGroup = ctx.id();
+      const rightGroup = ctx.id();
+      const memberIds = new Set(members.map((item) => item.itemId));
+      for (const track of branch.tracks) for (const item of track.items) {
+        if (memberIds.has(item.itemId)) item.linkGroupId = leftGroup;
+        else if (!priorIds.has(item.itemId)) item.linkGroupId = rightGroup;
+      }
+    }
+  }
+  for (const operation of operations) {
+    echoes.delete(`${operation.op}:${operation.itemId}`);
+    if (operation.itemId !== op.itemId) echoes.set(`${operation.op}:${operation.itemId}`, { operation, result });
+  }
+  return result;
 }
 
 function mapTranscript(state: EditorState, branch: Branch) {
@@ -781,7 +926,19 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
         ensureStandardTracks(branch);
       }
 
-      if (command.type === "ImportAsset") {
+      if (command.type === "SetAgentPolicy") {
+        draft.project.agentMutationPolicy = command.payload.policy;
+        const receipt: Receipt = {
+          operationId: ctx.id(),
+          summary: command.payload.policy === "plan_only" ? "Agent edits now require review." : "Agent edits may apply directly.",
+          stateDigest: digestProject(draft),
+          changedRanges: [],
+          warnings: [],
+        };
+        pushEvent(draft, ctx, command, receipt);
+        (draft as EditorState & { __receipt?: Receipt }).__receipt = receipt;
+        return;
+      } else if (command.type === "ImportAsset") {
         const invalid = validateImport(command.payload);
         if (invalid) throw Object.assign(new Error(invalid.message), { code: invalid.code });
         const assetId = command.payload.assetId ?? ctx.id();
@@ -797,6 +954,8 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
           width: command.payload.width,
           height: command.payload.height,
           checksum: command.payload.checksum,
+          checksumAlgorithm: command.payload.checksumAlgorithm,
+          availability: "ready",
           preparedTags: ["imported"],
           posterUri: command.payload.posterUri,
           mime: command.payload.mime,
@@ -805,6 +964,11 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
           hasAudio: command.payload.hasAudio,
           videoCodec: command.payload.videoCodec,
           audioCodec: command.payload.audioCodec,
+          waveformPeaks: command.payload.waveformPeaks,
+          proxyAssetId: command.payload.proxyAssetId,
+          proxyUri: command.payload.proxyUri,
+          proxyBytes: command.payload.proxyBytes,
+          proxyStatus: command.payload.proxyStatus,
         });
         const receipt: Receipt = {
           operationId: ctx.id(),
@@ -959,8 +1123,9 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
         const changed: ChangedRange[] = [];
         let applied = 0;
         const durationBefore = branch.durationMs;
+        const linkedEchoes = new Map<string, LinkedEcho>();
         for (const op of command.payload.operations) {
-          const result = applyOp(draft, branch, op, ctx);
+          const result = applyLinkedOp(draft, branch, op, ctx, linkedEchoes);
           if (result.skipped) {
             skipped.push(result.skipped);
             if (result.warning) warnings.push(result.warning);
@@ -1193,6 +1358,7 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
       } else if (command.type === "PlaceClip") {
         const assetErr = assetCheck(draft, command.payload.assetId);
         if (assetErr) throw Object.assign(new Error(assetErr.message), assetErr);
+        const linkGroupId = command.payload.trackId === "v1" ? ctx.id() : undefined;
         const item = buildPlacedItem(draft, branch, ctx, {
           assetId: command.payload.assetId,
           trackId: command.payload.trackId,
@@ -1204,6 +1370,7 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
           transitionIn: command.payload.transitionIn,
           transitionOut: command.payload.transitionOut,
           fadeMs: command.payload.fadeMs,
+          linkGroupId,
         });
         const replaceExisting = command.payload.replaceExisting ?? false;
         const changed = placeOnTrack(branch, item, replaceExisting, true, "place_clip");
@@ -1219,6 +1386,7 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
             transitionIn: command.payload.transitionIn,
             transitionOut: command.payload.transitionOut,
             fadeMs: command.payload.fadeMs,
+            linkGroupId,
           });
           changed.push(...placeOnTrack(branch, audioItem, replaceExisting, true, "place_linked_audio"));
         }
@@ -1254,6 +1422,10 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
           changedRanges: changed,
         });
       } else if (command.type === "SetTransition") {
+        const target = findItem(branch, command.payload.itemId);
+        if (!target) throw Object.assign(new Error("unknown item"), { code: "INVARIANT_VIOLATION" });
+        const hit = lockHits(branch, [{ startMs: target.item.startMs, endMs: target.item.endMs }]);
+        if (hit) throw lockedRangeError(hit);
         applyTransition(
           branch,
           command.payload.itemId,
@@ -1296,6 +1468,10 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
           },
         );
       } else if (command.type === "SetGain") {
+        const target = findItem(branch, command.payload.itemId);
+        if (!target) throw Object.assign(new Error("unknown item"), { code: "INVARIANT_VIOLATION" });
+        const hit = lockHits(branch, [{ startMs: target.item.startMs, endMs: target.item.endMs }]);
+        if (hit) throw lockedRangeError(hit);
         applyGain(branch, command.payload.itemId, command.payload.gain);
         const found = findItem(branch, command.payload.itemId)!;
         const operationId = ctx.id();
@@ -1305,6 +1481,8 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
           changedRanges: [{ startMs: found.item.startMs, endMs: found.item.endMs, changes: ["set_gain"] }],
         });
       } else if (command.type === "MuteTrack") {
+        const hit = lockHits(branch, [{ startMs: 0, endMs: branch.durationMs }]);
+        if (hit) throw lockedRangeError(hit);
         applyMute(branch, command.payload.trackId, command.payload.muted);
         const operationId = ctx.id();
         bump(branch, operationId);
@@ -1319,6 +1497,8 @@ export function applyCommand(state: EditorState, command: Command, ctx: BusConte
         throw Object.assign(new Error("unsupported"), { code: "UNSUPPORTED_OPERATION" });
       }
 
+      const violations = collectInvariantViolations(branch, draft.assets);
+      if (violations.length) throw Object.assign(new Error(violations.join("; ")), { code: "INVARIANT_VIOLATION", violations });
       if (command.type !== "AcceptBranch" && command.type !== "RecordExport" && command.type !== "PublishExport") {
         pushHistory(draft, branch.branchId, receipt.operationId, before, structuredClone(current(branch)));
       }

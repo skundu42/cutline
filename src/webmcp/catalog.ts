@@ -12,6 +12,7 @@ export const P0_TOOL_NAMES = [
   "lock_range",
   "unlock_range",
   "create_cut_branch",
+  "plan_edit",
   "apply_edit_batch",
   "style_captions",
   "place_broll",

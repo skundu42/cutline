@@ -31,6 +31,8 @@ export interface Asset {
   width?: number;
   height?: number;
   checksum: string;
+  checksumAlgorithm?: "sha256-content" | "sha256-metadata";
+  availability?: "ready" | "offline";
   preparedTags: string[];
   posterUri?: string;
   mime?: string;
@@ -39,6 +41,11 @@ export interface Asset {
   hasAudio?: boolean;
   videoCodec?: string;
   audioCodec?: string;
+  waveformPeaks?: number[];
+  proxyAssetId?: string;
+  proxyUri?: string;
+  proxyBytes?: number;
+  proxyStatus?: "ready" | "recommended" | "failed";
   safeRegions?: { name: string; x: number; y: number; width: number; height: number }[];
 }
 
@@ -61,6 +68,7 @@ export interface ClipInstance {
   transitionOutMs?: number;
   fadeMs?: number;
   status?: string;
+  linkGroupId?: string | null;
 }
 
 export interface CaptionCue {
@@ -140,6 +148,7 @@ export interface Project {
   activeBranchId: string;
   selectedFinalBranchId?: string;
   frameRate: number;
+  agentMutationPolicy?: "direct" | "plan_only";
 }
 
 export interface TranscriptWord {
@@ -238,6 +247,7 @@ export type ErrorCode =
   | "INVARIANT_VIOLATION"
   | "PREVIEW_FAILED"
   | "UNSUPPORTED_OPERATION"
+  | "APPROVAL_REQUIRED"
   | "UNAUTHORIZED"
   | "VALIDATION_ERROR";
 
@@ -349,9 +359,20 @@ export type EditOp =
       trackId: string;
       muted: boolean;
       required?: boolean;
+    }
+  | {
+      op: "set_link";
+      itemIds: string[];
+      linked: boolean;
+      required?: boolean;
     };
 
 export type Command =
+  | {
+      type: "SetAgentPolicy";
+      actor: Actor;
+      payload: { policy: "direct" | "plan_only" };
+    }
   | {
       type: "ImportTranscript";
       actor: Actor;
@@ -521,10 +542,16 @@ export type Command =
         mime: string;
         bytes?: number;
         checksum: string;
+        checksumAlgorithm?: Asset["checksumAlgorithm"];
         posterUri?: string;
         hasAudio?: boolean;
         videoCodec?: string;
         audioCodec?: string;
+        waveformPeaks?: number[];
+        proxyAssetId?: string;
+        proxyUri?: string;
+        proxyBytes?: number;
+        proxyStatus?: Asset["proxyStatus"];
       };
     }
   | {

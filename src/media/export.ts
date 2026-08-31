@@ -6,28 +6,34 @@ import {
   AudioBufferSource as EncodedAudioBufferSource,
   BlobSource,
   BufferTarget,
+  CanvasSource,
   EncodedPacketSink,
   EncodedVideoPacketSource,
   Input,
+  Mp4OutputFormat,
   Output,
   Quality,
   WebMOutputFormat,
+  canEncodeAudio,
 } from "mediabunny";
 
 export interface LocalRenderResult {
   blob: Blob;
   mimeType: string;
-  extension: "webm";
+  extension: RenderFormat;
   width: number;
   height: number;
+  mode: "accelerated" | "realtime";
 }
 
 export type RenderPreset = "720p" | "480p";
+export type RenderFormat = "webm" | "mp4";
 
 interface RenderOptions {
   editor: EditorState;
   branch: Branch;
   preset?: RenderPreset;
+  format?: RenderFormat;
   signal?: AbortSignal;
   onProgress?: (progress: number) => void;
 }
@@ -40,11 +46,10 @@ interface PreparedVisual {
   video: boolean;
 }
 
-const MIME_CANDIDATES = [
-  "video/webm;codecs=vp9",
-  "video/webm;codecs=vp8",
-  "video/webm",
-];
+const MIME_CANDIDATES: Record<RenderFormat, string[]> = {
+  webm: ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"],
+  mp4: ["video/mp4;codecs=avc1.42E01E", "video/mp4;codecs=h264", "video/mp4"],
+};
 
 export function getRenderSize(aspectRatio: Branch["crop"]["aspectRatio"], preset: RenderPreset = "720p") {
   const shortEdge = preset === "480p" ? 480 : 720;
@@ -54,9 +59,17 @@ export function getRenderSize(aspectRatio: Branch["crop"]["aspectRatio"], preset
   return { width: longEdge, height: shortEdge };
 }
 
-export function selectRenderMimeType() {
+export function selectRenderMimeType(format: RenderFormat = "webm") {
   if (typeof MediaRecorder === "undefined") return null;
-  return MIME_CANDIDATES.find((mime) => MediaRecorder.isTypeSupported(mime)) ?? null;
+  return MIME_CANDIDATES[format].find((mime) => MediaRecorder.isTypeSupported(mime)) ?? null;
+}
+
+export function getRenderCapabilities() {
+  return {
+    webm: Boolean(selectRenderMimeType("webm")),
+    mp4: Boolean(selectRenderMimeType("mp4")) && typeof AudioEncoder !== "undefined",
+    acceleratedStills: typeof VideoEncoder !== "undefined",
+  };
 }
 
 function abortError() {
@@ -357,7 +370,7 @@ async function mixBranchAudio(editor: EditorState, branch: Branch, signal?: Abor
   return context.startRendering();
 }
 
-async function muxRenderedAudio(videoBlob: Blob, audio: AudioBuffer | null, signal?: AbortSignal) {
+async function muxRenderedAudio(videoBlob: Blob, audio: AudioBuffer | null, format: RenderFormat, signal?: AbortSignal) {
   if (!audio) return { blob: videoBlob, mimeType: videoBlob.type || "video/webm" };
   assertNotAborted(signal);
   const input = new Input({ source: new BlobSource(videoBlob), formats: ALL_FORMATS });
@@ -368,9 +381,10 @@ async function muxRenderedAudio(videoBlob: Blob, audio: AudioBuffer | null, sign
     if (!codec) throw new Error("The local video codec could not be identified");
     const decoderConfig = await track.getDecoderConfig();
     const target = new BufferTarget();
-    const output = new Output({ format: new WebMOutputFormat(), target });
+    if (format === "mp4" && !(await canEncodeAudio("aac"))) throw new Error("This browser cannot encode AAC audio for MP4");
+    const output = new Output({ format: format === "mp4" ? new Mp4OutputFormat() : new WebMOutputFormat(), target });
     const videoSource = new EncodedVideoPacketSource(codec);
-    const audioSource = new EncodedAudioBufferSource({ codec: "opus", quality: new Quality({ bitrate: 192_000 }) });
+    const audioSource = new EncodedAudioBufferSource({ codec: format === "mp4" ? "aac" : "opus", quality: new Quality({ bitrate: 192_000 }) });
     output.addVideoTrack(videoSource);
     output.addAudioTrack(audioSource);
     await output.start();
@@ -396,11 +410,56 @@ async function muxRenderedAudio(videoBlob: Blob, audio: AudioBuffer | null, sign
   }
 }
 
-export async function renderBranchLocally({ editor, branch, preset = "720p", signal, onProgress }: RenderOptions): Promise<LocalRenderResult> {
+async function renderCanvasAccelerated(options: {
+  canvas: HTMLCanvasElement;
+  drawFrame: (timeMs: number) => void;
+  durationMs: number;
+  frameRate: number;
+  preset: RenderPreset;
+  format: RenderFormat;
+  audio: AudioBuffer | null;
+  signal?: AbortSignal;
+  onProgress?: (progress: number) => void;
+}) {
+  const { canvas, drawFrame, durationMs, frameRate, preset, format, audio, signal, onProgress } = options;
+  if (format === "mp4" && audio && !(await canEncodeAudio("aac"))) throw new Error("This browser cannot encode AAC audio for MP4");
+  const target = new BufferTarget();
+  const output = new Output({ format: format === "mp4" ? new Mp4OutputFormat() : new WebMOutputFormat(), target });
+  const videoSource = new CanvasSource(canvas, {
+    codec: format === "mp4" ? "avc" : "vp9",
+    bitrate: new Quality({ bitrate: preset === "480p" ? 2_500_000 : 5_000_000 }),
+    latencyMode: "quality",
+  });
+  output.addVideoTrack(videoSource, { frameRate });
+  const audioSource = audio ? new EncodedAudioBufferSource({ codec: format === "mp4" ? "aac" : "opus", quality: new Quality({ bitrate: 192_000 }) }) : null;
+  if (audioSource) output.addAudioTrack(audioSource);
+  await output.start();
+  const frameDuration = 1 / frameRate;
+  const frameCount = Math.max(1, Math.ceil(durationMs / 1000 * frameRate));
+  await Promise.all([
+    (async () => {
+      for (let frame = 0; frame < frameCount; frame += 1) {
+        assertNotAborted(signal);
+        const timestamp = frame * frameDuration;
+        drawFrame(Math.min(durationMs, timestamp * 1000));
+        await videoSource.add(timestamp, frameDuration, { keyFrame: frame % (frameRate * 2) === 0 });
+        onProgress?.((frame + 1) / frameCount * 0.95);
+      }
+    })(),
+    audioSource && audio ? audioSource.add(audio) : Promise.resolve(),
+  ]);
+  await output.finalize();
+  if (!target.buffer) throw new Error("The accelerated render could not be finalized");
+  const mimeType = await output.getMimeType();
+  onProgress?.(1);
+  return { blob: new Blob([target.buffer], { type: mimeType }), mimeType };
+}
+
+export async function renderBranchLocally({ editor, branch, preset = "720p", format = "webm", signal, onProgress }: RenderOptions): Promise<LocalRenderResult> {
   assertNotAborted(signal);
   if (branch.durationMs <= 0) throw new Error("Add at least one clip to the timeline before rendering");
-  const mimeType = selectRenderMimeType();
-  if (!mimeType) throw new Error("This browser cannot create a local WebM video");
+  const mimeType = selectRenderMimeType(format);
+  if (!mimeType) throw new Error(`This browser cannot create a local ${format.toUpperCase()} video`);
 
   const output = getRenderSize(branch.crop.aspectRatio, preset);
   const canvas = document.createElement("canvas");
@@ -509,9 +568,20 @@ export async function renderBranchLocally({ editor, branch, preset = "720p", sig
       if (cue) drawCaption(context, cue, branch, output);
     };
 
+    if (visuals.every((entry) => !entry.video) && typeof VideoEncoder !== "undefined") {
+      try {
+        const accelerated = await renderCanvasAccelerated({ canvas, drawFrame, durationMs: branch.durationMs, frameRate: editor.project.frameRate, preset, format, audio: mixedAudio, signal, onProgress });
+        return { blob: accelerated.blob, mimeType: accelerated.mimeType, extension: format, mode: "accelerated", ...output };
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        // Fall back to MediaRecorder when this browser exposes WebCodecs but cannot encode the selected codec.
+      }
+    }
+
     drawFrame(0);
     recorder.start(1000);
-    const startedAt = performance.now();
+    let elapsedMs = 0;
+    let lastFrameAt = performance.now();
     try {
       await new Promise<void>((resolve, reject) => {
         const tick = (now: number) => {
@@ -519,7 +589,10 @@ export async function renderBranchLocally({ editor, branch, preset = "720p", sig
             reject(abortError());
             return;
           }
-          const elapsedMs = Math.min(branch.durationMs, now - startedAt);
+          // requestAnimationFrame is suspended in a background tab. Advance only
+          // by active-frame time so returning to the tab cannot skip material.
+          elapsedMs = Math.min(branch.durationMs, elapsedMs + Math.min(100, Math.max(0, now - lastFrameAt)));
+          lastFrameAt = now;
           drawFrame(elapsedMs);
           onProgress?.(elapsedMs / branch.durationMs * 0.95);
           if (elapsedMs >= branch.durationMs) {
@@ -539,12 +612,13 @@ export async function renderBranchLocally({ editor, branch, preset = "720p", sig
     recorder.stop();
     await stopped;
     const recordedVideo = new Blob(chunks, { type: mimeType });
-    const muxed = await muxRenderedAudio(recordedVideo, mixedAudio, signal);
+    const muxed = await muxRenderedAudio(recordedVideo, mixedAudio, format, signal);
     onProgress?.(1);
     return {
       blob: muxed.blob,
       mimeType: muxed.mimeType,
-      extension: "webm",
+      extension: format,
+      mode: "realtime",
       ...output,
     };
   } finally {

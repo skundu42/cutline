@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { createProjectBundle, importProjectBundle } from "@/persistence/db";
 import { applyCommand, createBusContext, readMappedTranscript } from "../reducer";
 import { validateImportUri } from "../import";
 import { createEmptyState, MAIN_BRANCH_ID } from "../project";
+import { createSeedState } from "@/demo/manifest";
 
 describe("local content-agnostic projects", () => {
   it("starts with an empty standard timeline", () => {
@@ -53,12 +55,29 @@ describe("local content-agnostic projects", () => {
     expect(branch.tracks.find((track) => track.trackId === "a1")?.items).toHaveLength(1);
     expect(placed.receipt.summary).toContain("linked audio");
 
-    const exported = applyCommand(placed.state, {
-      type: "RecordExport",
+    const videoItem = branch.tracks.find((track) => track.trackId === "v1")!.items[0];
+    const audioItem = branch.tracks.find((track) => track.trackId === "a1")!.items[0];
+    expect(videoItem.linkGroupId).toBeTruthy();
+    expect(audioItem.linkGroupId).toBe(videoItem.linkGroupId);
+    const unlinked = applyCommand(placed.state, {
+      type: "ApplyEditBatch",
       actor: { type: "human", surface: "ui" },
       payload: {
         branchId: MAIN_BRANCH_ID,
         expectedBranchVersion: 1,
+        operations: [{ op: "set_link", itemIds: [videoItem.itemId, audioItem.itemId], linked: false }],
+      },
+    }, context);
+    expect(unlinked.ok).toBe(true);
+    if (!unlinked.ok) return;
+    expect(unlinked.state.branches[MAIN_BRANCH_ID].tracks.flatMap((track) => track.items).filter((item) => [videoItem.itemId, audioItem.itemId].includes(item.itemId)).every((item) => item.linkGroupId === null)).toBe(true);
+
+    const exported = applyCommand(unlinked.state, {
+      type: "RecordExport",
+      actor: { type: "human", surface: "ui" },
+      payload: {
+        branchId: MAIN_BRANCH_ID,
+        expectedBranchVersion: 2,
         uri: "local-render:digest",
         width: 1280,
         height: 720,
@@ -133,5 +152,17 @@ describe("local content-agnostic projects", () => {
     expect(transcript.ok).toBe(true);
     if (!transcript.ok) return;
     expect(readMappedTranscript(transcript.state, MAIN_BRANCH_ID)).toHaveLength(1);
+  });
+
+  it("round-trips a portable project bundle and remaps project and asset identities", async () => {
+    const original = createSeedState(100);
+    const originalAssetId = original.assets[0].assetId;
+    const bundle = await createProjectBundle(original);
+    const imported = await importProjectBundle(bundle, 200);
+    expect(imported.project.projectId).not.toBe(original.project.projectId);
+    expect(imported.project.title).toBe(`${original.project.title} (imported)`);
+    expect(imported.assets[0].assetId).not.toBe(originalAssetId);
+    const importedAssetIds = new Set(imported.assets.map((asset) => asset.assetId));
+    expect(Object.values(imported.branches).flatMap((branch) => branch.tracks).flatMap((track) => track.items).every((item) => importedAssetIds.has(item.assetId))).toBe(true);
   });
 });

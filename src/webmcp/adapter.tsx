@@ -1,4 +1,4 @@
-import { compareBranches, digestBranch, digestProject, listClipTransitions, readMappedTranscript } from "@/core";
+import { applyCommand, compareBranches, createBusContext, digestBranch, digestProject, listClipTransitions, readMappedTranscript } from "@/core";
 import { SUPPORTED_OPERATIONS } from "@/core/project";
 import { useEditorStore, activeBranch } from "@/store/editorStore";
 import type { InputSchema, ModelContext, WebMcpToolAnnotations } from "@mcp-b/webmcp-types";
@@ -6,6 +6,7 @@ import { useEffect } from "react";
 import { ZodError } from "zod";
 import { P0_TOOL_NAMES } from "./catalog";
 import { getLocalMediaCapabilities } from "@/media/localMedia";
+import { getRenderCapabilities } from "@/media/export";
 import { getLocalStorageBackend } from "@/persistence/db";
 import {
   AddCommentInput,
@@ -29,6 +30,7 @@ import {
   PlaceAudioInput,
   PlaceBrollInput,
   PlaceClipInput,
+  PlanEditInput,
   PreviewRangeInput,
   PublishInput,
   ProposeCommentResolutionInput,
@@ -78,6 +80,10 @@ function store() {
 type RegistrationScope = "all" | "status" | "operational";
 const idempotentResults = new Map<string, Promise<unknown>>();
 const MAX_IDEMPOTENT_RESULTS = 200;
+const POLICY_EXEMPT_TOOLS = new Set([
+  "project_status", "inspect_project", "get_timeline", "read_transcript", "get_comments",
+  "select_branch", "control_playback", "preview_range", "compare_cuts", "plan_edit",
+]);
 
 function idempotentExecute(key: string, execute: () => unknown) {
   const existing = idempotentResults.get(key);
@@ -118,10 +124,13 @@ export async function registerAll(controller: AbortController, scope: Registrati
         const projectError = typeof suppliedProjectId === "string" && suppliedProjectId !== store().editor.project.projectId
           ? toolError("PROJECT_NOT_FOUND", "Unknown project")
           : null;
+        const policyError = store().editor.project.agentMutationPolicy === "plan_only" && !POLICY_EXEMPT_TOOLS.has(name)
+          ? toolError("APPROVAL_REQUIRED", "This project is in plan-only mode. Call plan_edit and ask the user to approve direct agent edits in Cutline.")
+          : null;
         const idempotencyKey = typeof clientRequestId === "string"
           ? `${String(suppliedProjectId ?? store().editor.project.projectId)}:${store().editor.project.createdAt}:${name}:${clientRequestId}`
           : null;
-        const result = readinessError ?? projectError ?? await (idempotencyKey
+        const result = readinessError ?? projectError ?? policyError ?? await (idempotencyKey
           ? idempotentExecute(idempotencyKey, () => execute(input))
           : execute(input));
         const failed = typeof result === "object" && result !== null && "error" in result;
@@ -185,6 +194,7 @@ export async function registerAll(controller: AbortController, scope: Registrati
           aspectRatio: branch.crop.aspectRatio,
           activeBranchId: editor.project.activeBranchId,
           stateDigest: digestProject(editor),
+          agentMutationPolicy: editor.project.agentMutationPolicy ?? "direct",
         },
         ...(include.has("assets") ? { assets: editor.assets.slice(0, 200).map((asset) => ({
           assetId: asset.assetId,
@@ -229,8 +239,10 @@ export async function registerAll(controller: AbortController, scope: Registrati
           maxTracks: 5,
           supportedOperations: [...SUPPORTED_OPERATIONS],
           betweenClipTransitions: ["crossfade", "dissolve", "slide_left", "slide_right", "dip_to_black"],
-          exportPresets: ["720p"],
+          exportPresets: ["480p", "720p"],
+          exportFormats: getRenderCapabilities(),
           accessModel: "actors_equal",
+          agentMutationPolicy: editor.project.agentMutationPolicy ?? "direct",
           agentOperations: [...P0_TOOL_NAMES],
           publishing: { scope: "local", externalDestinationsConfigured: false },
           importLimitBytes: 500 * 1024 * 1024,
@@ -524,7 +536,7 @@ export async function registerAll(controller: AbortController, scope: Registrati
         },
       });
       if (!result.ok) return toolError(result.error.code, result.error.message, { branchVersion: result.error.branchVersion });
-      const created = Object.values(result.state.branches).find((item) => item.name === parsed.name)!;
+      const created = result.state.branches[result.receipt.branchId!];
       return {
         branchId: created.branchId,
         branchVersion: created.branchVersion,
@@ -535,9 +547,52 @@ export async function registerAll(controller: AbortController, scope: Registrati
   );
 
   await register(
+    "plan_edit",
+    "Plan edit batch",
+    "Validate and simulate an atomic edit batch without changing the project. Use before apply_edit_batch when the user wants review-first editing.",
+    jsonSchema(PlanEditInput),
+    (input) => {
+      const parsed = PlanEditInput.parse(input);
+      const snapshot = store().editor;
+      const currentBranch = snapshot.branches[parsed.branchId];
+      if (!currentBranch) return toolError("BRANCH_NOT_FOUND", "Unknown branch");
+      const result = applyCommand(snapshot, {
+        type: "ApplyEditBatch",
+        actor: { type: "agent", surface: "webmcp" },
+        payload: {
+          branchId: parsed.branchId,
+          expectedBranchVersion: parsed.expectedBranchVersion,
+          rationale: parsed.rationale,
+          operations: parsed.operations,
+        },
+      }, createBusContext(Date.now()));
+      if (!result.ok) return toolError(result.error.code, result.error.message, {
+        branchVersion: result.error.branchVersion,
+        lockId: result.error.lockId,
+        violations: result.error.violations,
+      });
+      const projected = result.state.branches[parsed.branchId];
+      return {
+        summary: result.receipt.summary,
+        currentBranchVersion: currentBranch.branchVersion,
+        currentStateDigest: digestBranch(currentBranch),
+        projectedBranchVersion: projected.branchVersion,
+        projectedStateDigest: digestBranch(projected),
+        projectedDurationMs: projected.durationMs,
+        changedRanges: result.receipt.changedRanges,
+        warnings: result.receipt.warnings,
+        skippedOperations: result.receipt.skippedOperations ?? [],
+        appliedOperationCount: result.receipt.appliedOperationCount ?? 0,
+        committed: false,
+      };
+    },
+    { readOnlyHint: true },
+  );
+
+  await register(
     "apply_edit_batch",
     "Apply edit batch",
-    "Atomically apply bounded timeline edits to a writable Cutline branch. Requires the branch version from the latest read. Required operations fail the whole batch; optional operations may skip LOCKED_RANGE.",
+    "Atomically apply up to 40 input edits to a writable branch. Split, trim, move, and delete propagate from either linked partner; equivalent paired operations coalesce. Unlink before contradictory edits. Required failures reject the batch; optional lock conflicts skip the whole linked edit. Requires the latest branch version.",
     jsonSchema(ApplyEditBatchInput),
     (input) => {
       const parsed = ApplyEditBatchInput.parse(input);
@@ -652,7 +707,7 @@ export async function registerAll(controller: AbortController, scope: Registrati
   await register(
     "place_clip",
     "Place clip",
-    "Place an asset from the bin onto V1 or V2 at a timeline time. Use replaceExisting to overwrite overlapping overlay clips. Does not export.",
+    "Place bin media on V1 or V2. V1 video also creates linked dialogue on A1. replaceExisting removes entire overlapping clips and their linked partners, respecting protection over their full ranges. Does not export.",
     jsonSchema(PlaceClipInput),
     (input) => {
       const parsed = PlaceClipInput.parse(input);
@@ -683,7 +738,7 @@ export async function registerAll(controller: AbortController, scope: Registrati
   await register(
     "place_audio",
     "Place audio",
-    "Place music or SFX on A1 (dialogue) or A2 (music/SFX) without changing picture unless the range overlaps A-roll audio on A1. Prefer A2 for beds and stings. Does not export.",
+    "Place audio or a video's audio-only range on A1 or A2. Prefer A2 for beds and stings. replaceExisting removes entire overlapping clips and linked partners, including picture, with full-range protection checks. Does not export.",
     jsonSchema(PlaceAudioInput),
     (input) => {
       const parsed = PlaceAudioInput.parse(input);
@@ -760,7 +815,7 @@ export async function registerAll(controller: AbortController, scope: Registrati
   await register(
     "split_clip",
     "Split clip",
-    "Split a clip at an absolute timeline time. Does not export.",
+    "Split a clip and its linked partners at an absolute timeline time. Left/right pieces remain independently linked. Unlink first for independent edits. Does not export.",
     jsonSchema(SplitClipInput),
     (input) => {
       const parsed = SplitClipInput.parse(input);
@@ -781,7 +836,7 @@ export async function registerAll(controller: AbortController, scope: Registrati
   await register(
     "trim_clip",
     "Trim clip",
-    "Trim a clip's in or out point on the timeline. Does not export.",
+    "Trim a clip's in or out point and apply the same adjustment to linked partners. Unlink first for independent edits. Does not export.",
     jsonSchema(TrimClipInput),
     (input) => {
       const parsed = TrimClipInput.parse(input);
@@ -846,7 +901,7 @@ export async function registerAll(controller: AbortController, scope: Registrati
   await register(
     "delete_clip",
     "Delete clip",
-    "Remove a clip without rippling later clips. Use apply_edit_batch ripple_delete to close gaps. Does not export.",
+    "Remove a clip and its linked partners without rippling later clips. Unlink first for independent deletion. Use apply_edit_batch ripple_delete to close gaps. Does not export.",
     jsonSchema(DeleteClipInput),
     (input) => {
       const parsed = DeleteClipInput.parse(input);
@@ -932,7 +987,7 @@ export async function registerAll(controller: AbortController, scope: Registrati
     jsonSchema(CompareCutsInput),
     (input) => {
       const parsed = CompareCutsInput.parse(input);
-      const { editor, dispatch, setCompare, setPlayhead, setPlaybackEndMs } = store();
+      const { editor, setCompare, setPlayhead, setPlaybackEndMs } = store();
       if (parsed.projectId !== editor.project.projectId) return toolError("PROJECT_NOT_FOUND", "Unknown project");
       const left = editor.branches[parsed.leftBranchId];
       const right = editor.branches[parsed.rightBranchId];
@@ -940,9 +995,8 @@ export async function registerAll(controller: AbortController, scope: Registrati
       if (parsed.range && parsed.range.endMs > Math.min(left.durationMs, right.durationMs)) {
         return toolError("INVALID_RANGE", "Comparison range must fit within both branches", { leftDurationMs: left.durationMs, rightDurationMs: right.durationMs });
       }
-      const selected = dispatch({ type: "SelectActiveBranch", actor: { type: "agent", surface: "webmcp" }, payload: { branchId: left.branchId } });
-      if (!selected.ok) return toolError(selected.error.code, selected.error.message);
-      setCompare({ enabled: true, leftId: left.branchId, rightId: right.branchId, show: "left" });
+      if (left.branchId === right.branchId) return toolError("VALIDATION_ERROR", "Choose two different branches");
+      setCompare({ enabled: true, leftId: left.branchId, rightId: right.branchId, show: "left" }, { type: "agent", surface: "webmcp" });
       if (parsed.range) setPlayhead(parsed.range.startMs);
       setPlaybackEndMs(null);
       return {
@@ -1035,7 +1089,7 @@ export async function registerAll(controller: AbortController, scope: Registrati
       const currentDigest = digestProject(snapshot.editor);
       if (parsed.expectedProjectDigest !== currentDigest) return toolError("CONFLICT", "expectedProjectDigest does not match the current project", { stateDigest: currentDigest });
       const deletedProjectId = snapshot.editor.project.projectId;
-      await snapshot.newProject();
+      await snapshot.deleteCurrentProject();
       return {
         deletedProjectId,
         projectId: store().editor.project.projectId,

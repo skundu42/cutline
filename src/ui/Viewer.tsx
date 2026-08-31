@@ -4,6 +4,7 @@ import { formatTimecode, getActiveClipTransition, getTransitionFrame } from "@/c
 import type { ClipInstance } from "@/core/types";
 import { activeBranch, useEditorStore } from "@/store/editorStore";
 import { useEffect, useRef, type CSSProperties } from "react";
+import { SourceViewer } from "./SourceViewer";
 
 function clipAt<T extends { startMs: number; endMs: number }>(items: T[], time: number) {
   return items.find((item) => time >= item.startMs && time < item.endMs) ?? null;
@@ -43,6 +44,32 @@ function PlayIcon({ playing }: { playing: boolean }) {
 }
 
 export function Viewer() {
+  const mode = useEditorStore((state) => state.monitorMode);
+  const sourceId = useEditorStore((state) => state.sourceAssetId);
+  const editor = useEditorStore((state) => state.editor);
+  const setMode = useEditorStore((state) => state.setMonitorMode);
+  const asset = editor.assets.find((item) => item.assetId === sourceId);
+  return <div className="monitor-shell">
+    <div className="monitor-tabs" role="tablist" aria-label="Monitor" onKeyDown={(event) => {
+      if (!asset || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === "Home" ? "source" : event.key === "End" ? "timeline" : mode === "source" ? "timeline" : "source";
+      setMode(next);
+      event.currentTarget.querySelector<HTMLButtonElement>(`[data-monitor='${next}']`)?.focus();
+    }}>
+      <button type="button" role="tab" id="source-tab" data-monitor="source" aria-controls="source-panel" aria-selected={mode === "source"} tabIndex={mode === "source" ? 0 : -1} disabled={!asset} onClick={() => setMode("source")}>Source</button>
+      <button type="button" role="tab" id="timeline-tab" data-monitor="timeline" aria-controls="timeline-panel" aria-selected={mode === "timeline"} tabIndex={mode === "timeline" ? 0 : -1} onClick={() => setMode("timeline")}>Timeline</button>
+    </div>
+    <div id="source-panel" role="tabpanel" aria-labelledby="source-tab" className="monitor-panel" hidden={mode !== "source"}>
+      {asset ? <SourceViewer key={`${editor.project.projectId}:${asset.assetId}`} asset={asset} active={mode === "source"} /> : null}
+    </div>
+    <div id="timeline-panel" role="tabpanel" aria-labelledby="timeline-tab" className="monitor-panel" hidden={mode !== "timeline"}>
+      {mode === "timeline" ? <TimelineViewer /> : null}
+    </div>
+  </div>;
+}
+
+function TimelineViewer() {
   const editor = useEditorStore((s) => s.editor);
   const playheadMs = useEditorStore((s) => s.playheadMs);
   const playing = useEditorStore((s) => s.playing);
@@ -75,12 +102,14 @@ export function Viewer() {
   const a2Clip = a2Track ? clipAt(a2Track.items, playheadMs) : null;
   const cue = branch.captions.find((item) => playheadMs >= item.startMs && playheadMs < item.endMs);
   const asset = (id: string) => editor.assets.find((item) => item.assetId === id);
+  const previewUri = (media: ReturnType<typeof asset>) => media?.proxyStatus === "ready" && media.proxyUri ? media.proxyUri : media?.uri;
 
   useEffect(() => {
     if (!playing) return;
     let frame = 0;
     let last = performance.now();
     const tick = (now: number) => {
+      if (!useEditorStore.getState().playing) return;
       const next = useEditorStore.getState().playheadMs + (now - last);
       last = now;
       const endMs = playbackEndMs ?? branch.durationMs;
@@ -112,6 +141,11 @@ export function Viewer() {
     sync(audio.current, a1Clip, clipVolume(a1Clip, playheadMs, a1Track.muted));
     sync(audio2.current, a2Clip, clipVolume(a2Clip, playheadMs, a2Track?.muted ?? false));
   }, [playheadMs, playing, v1Clip, v2Clip, v1Transition?.incoming, v2Transition?.incoming, a1Clip, a2Clip, a1Track.muted, a2Track?.muted]);
+
+  useEffect(() => {
+    const elements = [v1.current, v1Incoming.current, v2.current, v2Incoming.current, audio.current, audio2.current];
+    return () => { for (const element of elements) element?.pause(); };
+  }, []);
 
   const aspect = branch.crop.aspectRatio === "9:16" ? "aspect-[9/16]" : branch.crop.aspectRatio === "1:1" ? "aspect-square" : "aspect-video";
   const objectPos = `${branch.crop.normalizedCenter.x * 100}% ${branch.crop.normalizedCenter.y * 100}%`;
@@ -159,14 +193,14 @@ export function Viewer() {
       <div className="viewer-stage">
         <div className={`program-frame ${aspect}`}>
           {v1Clip && v1Asset && !v1IsStill ? (
-            <video ref={v1} src={v1Asset.uri} className="program-media" style={v1Style} muted playsInline />
+            <video ref={v1} src={previewUri(v1Asset)} className="program-media" style={v1Style} muted playsInline />
           ) : null}
           {v1Clip && v1Asset && v1IsStill ? (
             // Local blob URLs bypass the Next image optimizer by design.
             // eslint-disable-next-line @next/next/no-img-element
             <img src={v1Asset.uri} alt={v1Asset.label} className={`program-media ${v1Clip.fit === "contain" ? "contain" : ""}`} style={v1Style} />
           ) : null}
-          {v1Transition && v1IncomingAsset && !v1IncomingIsStill ? <video ref={v1Incoming} src={v1IncomingAsset.uri} className="program-media transition-incoming" style={transitionLayerStyle(v1TransitionFrame!.incoming, objectPos)} muted playsInline /> : null}
+          {v1Transition && v1IncomingAsset && !v1IncomingIsStill ? <video ref={v1Incoming} src={previewUri(v1IncomingAsset)} className="program-media transition-incoming" style={transitionLayerStyle(v1TransitionFrame!.incoming, objectPos)} muted playsInline /> : null}
           {v1Transition && v1IncomingAsset && v1IncomingIsStill ? (
             // Local blob URLs bypass the Next image optimizer by design.
             // eslint-disable-next-line @next/next/no-img-element
@@ -184,13 +218,13 @@ export function Viewer() {
               ) : firstVisualAsset && branch.durationMs === 0 ? <button className="viewer-next-step" type="button" onClick={addFirstVisual}>Add {firstVisualAsset.label} to timeline</button> : null}
             </div>
           ) : null}
-          {v2Clip && v2Asset && !isGraphic ? <video ref={v2} src={v2Asset.uri} className="program-media overlay-media" style={v2Style} muted playsInline /> : null}
+          {v2Clip && v2Asset && !isGraphic ? <video ref={v2} src={previewUri(v2Asset)} className="program-media overlay-media" style={v2Style} muted playsInline /> : null}
           {v2Clip && v2Asset && isGraphic ? (
             // Dynamic editor assets may be blob URLs, which cannot use next/image's optimizer.
             // eslint-disable-next-line @next/next/no-img-element
             <img src={v2Asset.uri} alt={v2Asset.label} className="program-media overlay-media contain" style={v2Style} />
           ) : null}
-          {v2Transition && v2IncomingAsset && !v2IncomingIsStill ? <video ref={v2Incoming} src={v2IncomingAsset.uri} className="program-media overlay-media transition-incoming" style={transitionLayerStyle({ ...v2TransitionFrame!.incoming, opacity: v2TransitionFrame!.incoming.opacity * 0.9 })} muted playsInline /> : null}
+          {v2Transition && v2IncomingAsset && !v2IncomingIsStill ? <video ref={v2Incoming} src={previewUri(v2IncomingAsset)} className="program-media overlay-media transition-incoming" style={transitionLayerStyle({ ...v2TransitionFrame!.incoming, opacity: v2TransitionFrame!.incoming.opacity * 0.9 })} muted playsInline /> : null}
           {v2Transition && v2IncomingAsset && v2IncomingIsStill ? (
             // Dynamic editor assets may be blob URLs, which cannot use next/image's optimizer.
             // eslint-disable-next-line @next/next/no-img-element

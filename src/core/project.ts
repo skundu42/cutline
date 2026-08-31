@@ -1,7 +1,7 @@
 import type { Branch, EditorState, Track } from "./types";
 
 export const MAIN_BRANCH_ID = "branch_main";
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const SUPPORTED_OPERATIONS = [
   "ripple_delete",
@@ -17,6 +17,7 @@ export const SUPPORTED_OPERATIONS = [
   "add_transition",
   "set_gain",
   "mute_track",
+  "set_link",
   "style_captions",
   "place_broll",
   "set_crop",
@@ -72,6 +73,7 @@ export function createEmptyState(now = 0, title = "Untitled cut"): EditorState {
       createdAt: now,
       activeBranchId: branch.branchId,
       frameRate: 30,
+      agentMutationPolicy: "direct",
     },
     assets: [],
     transcript: [],

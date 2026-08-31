@@ -1,7 +1,7 @@
 "use client";
 
 import { digestBranch, formatTimecode } from "@/core";
-import { getRenderSize, selectRenderMimeType, type RenderPreset } from "@/media/export";
+import { getRenderCapabilities, getRenderSize, type RenderFormat, type RenderPreset } from "@/media/export";
 import { activeBranch, useEditorStore } from "@/store/editorStore";
 import { useEffect, useRef, useState } from "react";
 
@@ -32,7 +32,10 @@ export function ExportModal() {
   const cancelRender = useEditorStore((state) => state.cancelRender);
   const branch = activeBranch(editor);
   const [preset, setPreset] = useState<RenderPreset>("720p");
-  const renderSupported = typeof MediaRecorder === "undefined" ? null : Boolean(selectRenderMimeType());
+  const [format, setFormat] = useState<RenderFormat>("webm");
+  const capabilities = getRenderCapabilities();
+  const containsVideo = editor.assets.some((asset) => asset.kind === "video" && branch.tracks.some((track) => track.items.some((item) => item.assetId === asset.assetId)));
+  const renderSupported = typeof MediaRecorder === "undefined" ? null : capabilities[format];
   const output = renderState.status === "ready" && renderState.width && renderState.height
     ? { width: renderState.width, height: renderState.height }
     : getRenderSize(branch.crop.aspectRatio, preset);
@@ -51,7 +54,7 @@ export function ExportModal() {
         return;
       }
       if (event.key !== "Tab") return;
-      const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), a[href]") ?? []);
+      const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], select:not([disabled])") ?? []);
       if (!focusable.length) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
@@ -88,21 +91,22 @@ export function ExportModal() {
             <div><dt>Branch</dt><dd>{branch.name}</dd></div>
             <div><dt>Duration</dt><dd>{formatTimecode(branch.durationMs)}</dd></div>
             <div><dt>Resolution</dt><dd>{output.width} × {output.height}</dd></div>
-            <div><dt>Format</dt><dd>WebM · browser native</dd></div>
-            <div><dt>Estimated time</dt><dd>About {Math.max(1, Math.ceil(branch.durationMs / 1000))} sec</dd></div>
+            <div><dt>Format</dt><dd>{(renderState.format ?? format).toUpperCase()} · browser native</dd></div>
+            <div><dt>Estimated time</dt><dd>{containsVideo ? `About ${Math.max(1, Math.ceil(branch.durationMs / 1000))} sec` : capabilities.acceleratedStills ? "Faster than real time" : `About ${Math.max(1, Math.ceil(branch.durationMs / 1000))} sec`}</dd></div>
+            {renderState.mode ? <div><dt>Render mode</dt><dd>{renderState.mode === "accelerated" ? "Accelerated" : "Real time"}</dd></div> : null}
             {renderState.status === "ready" ? <div><dt>File size</dt><dd>{formatBytes(renderState.bytes)}</dd></div> : null}
             <div className="digest-row"><dt>State digest</dt><dd title={digestBranch(branch)}>{digestBranch(branch).slice(0, 22)}…</dd></div>
           </dl>
         </div>
 
-        <label className="render-preset"><span>Output quality</span><select value={preset} disabled={rendering || renderState.status === "ready"} onChange={(event) => setPreset(event.target.value as RenderPreset)}><option value="720p">720p · best quality</option><option value="480p">480p · smaller file</option></select></label>
-        {renderSupported === false ? <div className="export-notice" role="alert">This browser cannot create a local WebM video. Use a current Chromium-based browser.</div> : null}
+        <div className="render-options"><label className="render-preset"><span>Output quality</span><select value={preset} disabled={rendering || renderState.status === "ready"} onChange={(event) => setPreset(event.target.value as RenderPreset)}><option value="720p">720p · best quality</option><option value="480p">480p · smaller file</option></select></label><label className="render-preset"><span>Container</span><select value={format} disabled={rendering || renderState.status === "ready"} onChange={(event) => setFormat(event.target.value as RenderFormat)}><option value="webm">WebM · widest support</option>{capabilities.mp4 ? <option value="mp4">MP4 · H.264/AAC</option> : null}</select></label></div>
+        {renderSupported === false ? <div className="export-notice" role="alert">This browser cannot create a local {format.toUpperCase()} video. Choose WebM or use a current browser with the required encoders.</div> : null}
 
         {rendering ? (
           <div className="render-progress" role="status" aria-live="polite">
-            <div><span>{renderState.status === "preparing" ? "Preparing local media" : "Rendering in real time"}</span><strong>{Math.round(renderState.progress * 100)}%</strong></div>
+            <div><span>{renderState.status === "preparing" ? "Preparing local media" : containsVideo ? "Rendering in real time" : capabilities.acceleratedStills ? "Encoding locally" : "Rendering in real time"}</span><strong>{Math.round(renderState.progress * 100)}%</strong></div>
             <progress max={1} value={renderState.progress} />
-            <p>Keep this tab open. Rendering takes about as long as the cut.</p>
+            <p>Keep this tab open. {containsVideo || !capabilities.acceleratedStills ? "Video rendering takes about as long as the cut." : "This still-image timeline can finish faster than playback."}</p>
           </div>
         ) : null}
         {renderState.status === "ready" ? <div className="render-ready" role="status"><span>Render complete</span><p>The download matches the current timeline digest.</p></div> : null}
@@ -118,7 +122,7 @@ export function ExportModal() {
           {renderState.status === "ready" && renderState.downloadUrl && renderState.filename ? (
             <a data-testid="download-export" className="primary-button" href={renderState.downloadUrl} download={renderState.filename}><DownloadIcon /> Download video</a>
           ) : (
-            <button data-testid="render-export" className="primary-button" disabled={rendering || branch.durationMs === 0 || renderSupported === false} onClick={() => void renderExport(preset)}><RenderIcon /> {renderState.status === "failed" || renderState.status === "cancelled" ? "Render again" : `Render ${preset}`}</button>
+            <button data-testid="render-export" className="primary-button" disabled={rendering || branch.durationMs === 0 || renderSupported === false} onClick={() => void renderExport(preset, undefined, undefined, format)}><RenderIcon /> {renderState.status === "failed" || renderState.status === "cancelled" ? "Render again" : `Render ${preset}`}</button>
           )}
         </footer>
       </section>

@@ -36,7 +36,7 @@ export function getLocalMediaCapabilities() {
     mediaEngine: "mediabunny",
     mediaWorker: typeof Worker !== "undefined",
     webCodecs: typeof VideoDecoder !== "undefined" && typeof VideoEncoder !== "undefined",
-    captionFormats: ["srt", "vtt", "ssa", "ass"],
+    previewProxies: typeof VideoEncoder !== "undefined",
+    captionFormats: ["srt", "vtt"],
   } as const;
 }
-

@@ -5,6 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/persistence/db", () => ({
   clearEditor: vi.fn(async () => undefined),
+  cleanupOrphanedMedia: vi.fn(async () => undefined),
+  createProjectBundle: vi.fn(async () => new Blob()),
+  deleteMediaBlob: vi.fn(async () => undefined),
+  deleteProject: vi.fn(async () => undefined),
+  importProjectBundle: vi.fn(async () => { throw new Error("not mocked"); }),
+  listProjects: vi.fn(async () => []),
   loadEditor: vi.fn(async () => null),
   persistEditor: vi.fn(async () => undefined),
   putMediaBlob: vi.fn(async () => undefined),
@@ -19,6 +25,8 @@ vi.mock("@/media/export", async (importOriginal) => {
     renderBranchLocally: vi.fn(async () => ({
       blob: new Blob(["rendered"], { type: "video/webm" }),
       mimeType: "video/webm",
+      extension: "webm",
+      mode: "realtime",
       width: 1280,
       height: 720,
     })),
@@ -64,6 +72,10 @@ function resetStore(ready = true) {
     lastError: null,
     registeredTools: [],
     compare: { enabled: false, leftId: null, rightId: null, show: "left" },
+    monitorMode: "timeline",
+    sourceAssetId: null,
+    playing: false,
+    playheadMs: 0,
   });
 }
 
@@ -78,6 +90,53 @@ describe("WebMCP registered handlers", () => {
     tools.clear();
     installModelContext();
     resetStore();
+  });
+
+  it("gives UI and agent edits the same linked behavior and keeps plans non-committing", async () => {
+    await registerTools();
+    const operations = [{ op: "split" as const, itemId: "c_a1_take1", atMs: 1000 }];
+    const before = useEditorStore.getState().editor;
+    const planned = await tools.get("plan_edit")!.execute({ projectId: before.project.projectId, branchId: SOURCE_BRANCH_ID, expectedBranchVersion: 0, operations });
+    expect(planned).toMatchObject({ committed: false });
+    expect(useEditorStore.getState().editor).toBe(before);
+    const summarize = () => useEditorStore.getState().editor.branches[SOURCE_BRANCH_ID].tracks.map((track) => ({
+      trackId: track.trackId, items: track.items.map((item) => [item.startMs, item.endMs, item.sourceInMs, item.sourceOutMs]),
+    }));
+    const ui = useEditorStore.getState().dispatch({ type: "ApplyEditBatch", actor: { type: "human", surface: "ui" }, payload: { branchId: SOURCE_BRANCH_ID, expectedBranchVersion: 0, operations } });
+    expect(ui.ok).toBe(true);
+    const expected = summarize();
+    resetStore();
+    const result = await tools.get("split_clip")!.execute({ projectId: before.project.projectId, branchId: SOURCE_BRANCH_ID, expectedBranchVersion: 0, itemId: "c_a1_take1", atMs: 1000 });
+    expect(result).toMatchObject({ branchVersion: 1 });
+    expect(summarize()).toEqual(expected);
+  });
+
+  it("identifies new branches by ID even when names are duplicated", async () => {
+    await registerTools();
+    const state = useEditorStore.getState().editor;
+    const created = await tools.get("create_cut_branch")!.execute({ projectId: state.project.projectId, baseBranchId: SOURCE_BRANCH_ID, expectedBaseVersion: 0, name: state.branches[SOURCE_BRANCH_ID].name }) as { branchId: string };
+    expect(created.branchId).not.toBe(SOURCE_BRANCH_ID);
+    expect(created.branchId).toBe(useEditorStore.getState().editor.project.activeBranchId);
+  });
+
+  it("keeps comparison, active timeline, and source playback mode aligned", async () => {
+    await registerTools();
+    const store = useEditorStore.getState();
+    const originalDigest = digestBranch(store.editor.branches[SOURCE_BRANCH_ID]);
+    store.selectSource(store.editor.assets[0].assetId);
+    expect(useEditorStore.getState()).toMatchObject({ monitorMode: "source", playing: false });
+    expect(digestBranch(useEditorStore.getState().editor.branches[SOURCE_BRANCH_ID])).toBe(originalDigest);
+    const created = await tools.get("create_cut_branch")!.execute({ projectId: store.editor.project.projectId, baseBranchId: SOURCE_BRANCH_ID, expectedBaseVersion: 0, name: "Comparison" }) as { branchId: string };
+    useEditorStore.getState().selectSource(store.editor.assets[0].assetId);
+    await tools.get("compare_cuts")!.execute({ projectId: store.editor.project.projectId, leftBranchId: SOURCE_BRANCH_ID, rightBranchId: created.branchId });
+    expect(useEditorStore.getState()).toMatchObject({ monitorMode: "timeline", editor: { project: { activeBranchId: SOURCE_BRANCH_ID } } });
+    useEditorStore.getState().setCompare({ show: "right" });
+    expect(useEditorStore.getState().editor.project.activeBranchId).toBe(created.branchId);
+    useEditorStore.getState().setCompare({ enabled: false });
+    expect(useEditorStore.getState().editor.project.activeBranchId).toBe(created.branchId);
+    useEditorStore.getState().selectSource(store.editor.assets[0].assetId);
+    useEditorStore.getState().setPlaying(true);
+    expect(useEditorStore.getState()).toMatchObject({ monitorMode: "timeline", playing: true });
   });
 
   it("registers readiness and operational tools in independently removable groups", async () => {
@@ -216,6 +275,30 @@ describe("WebMCP registered handlers", () => {
     const retry = await tools.get("create_cut_branch")!.execute(input);
     expect(retry).toEqual(first);
     expect(Object.keys(useEditorStore.getState().editor.branches)).toHaveLength(2);
+  });
+
+  it("simulates edit plans without mutation and enforces review-first policy", async () => {
+    await registerTools();
+    const before = digestBranch(useEditorStore.getState().editor.branches[SOURCE_BRANCH_ID]);
+    const planned = await tools.get("plan_edit")!.execute({
+      projectId: "proj_kv_demo_v1",
+      branchId: SOURCE_BRANCH_ID,
+      expectedBranchVersion: 0,
+      rationale: "Preview a shorter ending",
+      operations: [{ op: "ripple_delete", range: { startMs: 70_000, endMs: 74_000 } }],
+    });
+    expect(planned).toMatchObject({ committed: false, currentBranchVersion: 0, projectedBranchVersion: 1, projectedDurationMs: 70_000 });
+    expect(digestBranch(useEditorStore.getState().editor.branches[SOURCE_BRANCH_ID])).toBe(before);
+
+    useEditorStore.getState().setAgentMutationPolicy("plan_only");
+    const blocked = await tools.get("apply_edit_batch")!.execute({
+      projectId: "proj_kv_demo_v1",
+      branchId: SOURCE_BRANCH_ID,
+      expectedBranchVersion: 0,
+      operations: [{ op: "ripple_delete", range: { startMs: 70_000, endMs: 74_000 } }],
+    });
+    expect(blocked).toMatchObject({ error: { code: "APPROVAL_REQUIRED" } });
+    expect(digestBranch(useEditorStore.getState().editor.branches[SOURCE_BRANCH_ID])).toBe(before);
   });
 
   it("gives agents first-class control over transcripts, locks, comments, export, publish, and acceptance", async () => {

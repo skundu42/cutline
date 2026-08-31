@@ -230,12 +230,22 @@ const EditOpSchema = z.discriminatedUnion("op", [
     muted: z.boolean(),
     required: z.boolean().optional(),
   }),
+  z.object({
+    op: z.literal("set_link"),
+    itemIds: z.array(z.string().min(1)).min(1).max(20),
+    linked: z.boolean(),
+    required: z.boolean().optional(),
+  }).superRefine((input, context) => {
+    if (input.linked && input.itemIds.length < 2) context.addIssue({ code: "custom", path: ["itemIds"], message: "Choose at least two clips to link" });
+  }),
 ]);
 
 export const ApplyEditBatchInput = WriteEnvelopeSchema.extend({
   rationale: z.string().max(500).optional(),
   operations: z.array(EditOpSchema).min(1).max(40),
 });
+
+export const PlanEditInput = ApplyEditBatchInput;
 
 export const StyleCaptionsInput = WriteEnvelopeSchema.extend({
   source: z.literal("transcript"),

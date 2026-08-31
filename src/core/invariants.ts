@@ -19,6 +19,10 @@ export function collectInvariantViolations(branch: Branch, assets: Asset[] = [])
     const sorted = [...track.items].sort((a, b) => a.startMs - b.startMs);
     for (let i = 0; i < sorted.length; i++) {
       const item = sorted[i];
+      if (![item.startMs, item.endMs, item.sourceInMs, item.sourceOutMs].every(Number.isFinite)
+        || item.startMs < 0 || item.sourceInMs < 0) {
+        violations.push(`${item.itemId} has invalid or negative timing`);
+      }
       maxEnd = Math.max(maxEnd, item.endMs);
       if (item.startMs >= item.endMs) {
         violations.push(`${item.itemId} has startMs >= endMs`);

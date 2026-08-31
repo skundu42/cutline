@@ -322,6 +322,88 @@ describe("locks", () => {
     expect(unlocked.ok).toBe(true);
     if (unlocked.ok) expect(unlocked.state.branches[SOURCE_BRANCH_ID].locks).toHaveLength(0);
   });
+
+  it("protects split, clip presentation, gain, mute, and optional delete operations", () => {
+    const locked = applyCommand(createSeedState(), {
+      type: "SetLock",
+      actor: { type: "human", surface: "ui" },
+      payload: {
+        action: "lock",
+        branchId: SOURCE_BRANCH_ID,
+        expectedBranchVersion: 0,
+        range: { startMs: 4000, endMs: 6000 },
+        label: "Approved opening",
+      },
+    }, ctx());
+    expect(locked.ok).toBe(true);
+    if (!locked.ok) return;
+
+    const optional = applyCommand(locked.state, {
+      type: "ApplyEditBatch",
+      actor: { type: "agent", surface: "webmcp" },
+      payload: {
+        branchId: SOURCE_BRANCH_ID,
+        expectedBranchVersion: 1,
+        operations: [
+          { op: "split", itemId: "c_v1_take1", atMs: 5000, required: false },
+          { op: "set_transition", itemId: "c_v1_take1", transitionIn: "fade_in", required: false },
+          { op: "set_gain", itemId: "c_a1_take1", gain: 0.25, required: false },
+          { op: "mute_track", trackId: "a1", muted: true, required: false },
+          { op: "delete", itemId: "c_v1_take1", required: false },
+        ],
+      },
+    }, ctx());
+    expect(optional.ok).toBe(true);
+    if (!optional.ok) return;
+    expect(optional.receipt.skippedOperations).toEqual([
+      { op: "split", reason: "LOCKED_RANGE" },
+      { op: "set_transition", reason: "LOCKED_RANGE" },
+      { op: "set_gain", reason: "LOCKED_RANGE" },
+      { op: "mute_track", reason: "LOCKED_RANGE" },
+      { op: "delete", reason: "LOCKED_RANGE" },
+    ]);
+    const branch = optional.state.branches[SOURCE_BRANCH_ID];
+    expect(branch.tracks.find((track) => track.trackId === "v1")!.items.some((item) => item.itemId === "c_v1_take1")).toBe(true);
+    expect(branch.tracks.find((track) => track.trackId === "a1")!.muted).toBe(false);
+    expect(branch.tracks.find((track) => track.trackId === "a1")!.items[0].gain).not.toBe(0.25);
+
+    const requiredSplit = applyCommand(locked.state, {
+      type: "ApplyEditBatch",
+      actor: { type: "human", surface: "ui" },
+      payload: {
+        branchId: SOURCE_BRANCH_ID,
+        expectedBranchVersion: 1,
+        operations: [{ op: "split", itemId: "c_v1_take1", atMs: 5000 }],
+      },
+    }, ctx());
+    expect(requiredSplit).toMatchObject({ ok: false, error: { code: "LOCKED_RANGE" } });
+  });
+
+  it("rejects first-class presentation and audio commands in protected ranges", () => {
+    const locked = applyCommand(createSeedState(), {
+      type: "SetLock",
+      actor: { type: "human", surface: "ui" },
+      payload: {
+        action: "lock",
+        branchId: SOURCE_BRANCH_ID,
+        expectedBranchVersion: 0,
+        range: { startMs: 1000, endMs: 2000 },
+        label: "Approved opening",
+      },
+    }, ctx());
+    expect(locked.ok).toBe(true);
+    if (!locked.ok) return;
+
+    const commands = [
+      { type: "SetTransition", payload: { branchId: SOURCE_BRANCH_ID, expectedBranchVersion: 1, itemId: "c_v1_take1", transitionIn: "fade_in" } },
+      { type: "SetGain", payload: { branchId: SOURCE_BRANCH_ID, expectedBranchVersion: 1, itemId: "c_a1_take1", gain: 0.5 } },
+      { type: "MuteTrack", payload: { branchId: SOURCE_BRANCH_ID, expectedBranchVersion: 1, trackId: "a1", muted: true } },
+    ] as const;
+    for (const command of commands) {
+      const result = applyCommand(locked.state, { ...command, actor: { type: "agent", surface: "webmcp" } }, ctx());
+      expect(result).toMatchObject({ ok: false, error: { code: "LOCKED_RANGE" } });
+    }
+  });
 });
 
 describe("golden cut", () => {

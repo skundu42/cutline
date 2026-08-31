@@ -4,7 +4,7 @@ import { DEMO_TRANSCRIPT } from "./transcript";
 export const PROJECT_ID = "proj_kv_demo_v1";
 export const SOURCE_BRANCH_ID = "branch_source";
 export const DEMO_DURATION_MS = 74000;
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 3;
 
 export const WINNING_PROMPT =
   "Turn this into a punchy 35-second vertical short for software engineers. Remove dead air and false starts, use the cleaner second take, cover the cache explanation with the GPU clip, hold the diagram long enough to understand it, and add bold captions. Create a new branch—do not touch locked ranges or export.";
@@ -84,6 +84,7 @@ export function createSeedState(now = 0): EditorState {
       createdAt: now,
       activeBranchId: SOURCE_BRANCH_ID,
       frameRate: 30,
+      agentMutationPolicy: "direct",
     },
     assets,
     transcript: DEMO_TRANSCRIPT,

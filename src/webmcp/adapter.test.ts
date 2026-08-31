@@ -12,6 +12,7 @@ describe("webmcp contract", () => {
 
   it("exposes first-class agent operations in the tool catalog", () => {
     expect(P0_TOOL_NAMES).toContain("apply_edit_batch");
+    expect(P0_TOOL_NAMES).toContain("plan_edit");
     expect(P0_TOOL_NAMES).toContain("import_media");
     expect(P0_TOOL_NAMES).toContain("place_audio");
     expect(P0_TOOL_NAMES).toContain("add_transition");

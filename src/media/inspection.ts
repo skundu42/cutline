@@ -14,7 +14,20 @@ async function inspectImage(blob: Blob): Promise<MediaInspection> {
   if (typeof createImageBitmap !== "function") {
     return { durationMs: 5000, hasVideo: false, hasAudio: false };
   }
-  const bitmap = await createImageBitmap(blob);
+  const bitmap = await createImageBitmap(blob).catch(async (error) => {
+    // SVG decoding is not supported by every worker's ImageBitmap implementation.
+    // The inspection client retries on the main thread, where native images work.
+    if (typeof Image === "undefined") throw error;
+    const image = new Image();
+    const uri = URL.createObjectURL(blob);
+    try {
+      image.src = uri;
+      await image.decode();
+      return { width: image.naturalWidth, height: image.naturalHeight, close: () => {} };
+    } finally {
+      URL.revokeObjectURL(uri);
+    }
+  });
   try {
     return {
       durationMs: 5000,
@@ -68,4 +81,3 @@ export async function inspectMediaBlob(blob: Blob, mime = blob.type): Promise<Me
     input.dispose();
   }
 }
-

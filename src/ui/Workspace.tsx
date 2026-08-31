@@ -2,6 +2,7 @@
 
 import { compareBranches, formatTimecode, listClipTransitions } from "@/core";
 import { readMappedTranscript } from "@/core/reducer";
+import { linkedItems } from "@/core/linked";
 import type { BasicClipTransition, CaptionPreset, Transition } from "@/core/types";
 import { WINNING_PROMPT } from "@/demo/manifest";
 import { activeBranch, useEditorStore } from "@/store/editorStore";
@@ -85,6 +86,14 @@ export function Workspace() {
   const storageHealth = useEditorStore((s) => s.storageHealth);
   const hydrationError = useEditorStore((s) => s.hydrationError);
   const newProject = useEditorStore((s) => s.newProject);
+  const deleteCurrentProject = useEditorStore((s) => s.deleteCurrentProject);
+  const switchProject = useEditorStore((s) => s.switchProject);
+  const importProjectFile = useEditorStore((s) => s.importProjectFile);
+  const exportProjectFile = useEditorStore((s) => s.exportProjectFile);
+  const relinkAsset = useEditorStore((s) => s.relinkAsset);
+  const generateProxy = useEditorStore((s) => s.generateProxy);
+  const projects = useEditorStore((s) => s.projects);
+  const setAgentMutationPolicy = useEditorStore((s) => s.setAgentMutationPolicy);
   const requestPersistentStorage = useEditorStore((s) => s.requestPersistentStorage);
   const clearError = useEditorStore((s) => s.clearError);
   const setExportOpen = useEditorStore((s) => s.setExportOpen);
@@ -94,17 +103,88 @@ export function Workspace() {
   const setPlayhead = useEditorStore((s) => s.setPlayhead);
   const setPlaying = useEditorStore((s) => s.setPlaying);
   const playing = useEditorStore((s) => s.playing);
+  const selectSource = useEditorStore((s) => s.selectSource);
+  const renderStatus = useEditorStore((s) => s.renderState.status);
   const [transcriptCollapsed, setTranscriptCollapsed] = useState(true);
   const [activityCollapsed, setActivityCollapsed] = useState(false);
   const [activityTab, setActivityTab] = useState<ActivityTab>("comments");
   const [mobileView, setMobileView] = useState<MobileView>("preview");
+  const [assetPaneWidth, setAssetPaneWidth] = useState(250);
+  const [reviewPaneWidth, setReviewPaneWidth] = useState(320);
+  const [timelineHeight, setTimelineHeight] = useState(198);
+  const [splitShortcut, setSplitShortcut] = useState("s");
+  const [protectShortcut, setProtectShortcut] = useState("l");
+  const [markerShortcut, setMarkerShortcut] = useState("m");
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+  const workspaceRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { void hydrate(); }, [hydrate]);
 
+  useEffect(() => {
+    const read = (key: string, fallback: number) => {
+      const parsed = Number(window.localStorage.getItem(key));
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+    };
+    const frame = window.requestAnimationFrame(() => {
+      const availableSideWidth = Math.max(450, window.innerWidth - 420);
+      const storedReviewWidth = Math.max(260, Math.min(520, read("cutline.layout.review", 320)));
+      const reviewWidth = Math.min(storedReviewWidth, availableSideWidth - 190);
+      const mediaWidth = Math.max(190, Math.min(430, read("cutline.layout.media", 250), availableSideWidth - reviewWidth));
+      setAssetPaneWidth(mediaWidth);
+      setReviewPaneWidth(reviewWidth);
+      setTimelineHeight(read("cutline.layout.timeline", 198));
+      setSplitShortcut(window.localStorage.getItem("cutline.shortcut.split") || "s");
+      setProtectShortcut(window.localStorage.getItem("cutline.shortcut.protect") || "l");
+      setMarkerShortcut(window.localStorage.getItem("cutline.shortcut.marker") || "m");
+      setPreferencesLoaded(true);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    if (!preferencesLoaded) return;
+    window.localStorage.setItem("cutline.layout.media", String(assetPaneWidth));
+    window.localStorage.setItem("cutline.layout.review", String(reviewPaneWidth));
+    window.localStorage.setItem("cutline.layout.timeline", String(timelineHeight));
+  }, [assetPaneWidth, preferencesLoaded, reviewPaneWidth, timelineHeight]);
+
+  useEffect(() => {
+    if (!preferencesLoaded) return;
+    window.localStorage.setItem("cutline.shortcut.split", splitShortcut);
+    window.localStorage.setItem("cutline.shortcut.protect", protectShortcut);
+    window.localStorage.setItem("cutline.shortcut.marker", markerShortcut);
+  }, [markerShortcut, preferencesLoaded, protectShortcut, splitShortcut]);
+
+  useEffect(() => {
+    if (renderStatus !== "preparing" && renderStatus !== "rendering") return;
+    const protectRender = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener("beforeunload", protectRender);
+    return () => window.removeEventListener("beforeunload", protectRender);
+  }, [renderStatus]);
+
+  const beginPaneResize = (kind: "media" | "review" | "timeline", event: React.PointerEvent) => {
+    const rect = workspaceRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    event.preventDefault();
+    const move = (pointer: PointerEvent) => {
+      if (kind === "media") setAssetPaneWidth(Math.max(190, Math.min(430, rect.width - reviewPaneWidth - 420, pointer.clientX - rect.left)));
+      if (kind === "review") setReviewPaneWidth(Math.max(260, Math.min(520, rect.width - assetPaneWidth - 420, rect.right - pointer.clientX)));
+      if (kind === "timeline") setTimelineHeight(Math.max(170, Math.min(430, rect.bottom - pointer.clientY)));
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop, { once: true });
+  };
+
   const branch = activeBranch(editor);
   const branchHistory = editor.history[branch.branchId] ?? { undo: [], redo: [] };
-  const canUndo = branchHistory.undo.length > 0;
-  const canRedo = branchHistory.redo.length > 0;
+  const canUndo = branch.status === "working" && branchHistory.undo.length > 0;
+  const canRedo = branch.status === "working" && branchHistory.redo.length > 0;
   const transcript = useMemo(() => readMappedTranscript(editor, branch.branchId), [editor, branch.branchId]);
   const webMcpConnected = registeredTools.length > 0 && !registeredTools.some((name) => name.startsWith("("));
   const agentToolCount = registeredTools.filter((name) => !name.startsWith("(")).length;
@@ -113,7 +193,8 @@ export function Workspace() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
-      if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable) return;
+      if (event.defaultPrevented || target.closest("input, textarea, select, button, summary, [role='dialog'], dialog") || target.isContentEditable
+        || document.querySelector("[aria-modal='true'], dialog[open]") || useEditorStore.getState().monitorMode === "source") return;
       if (event.code === "Space") {
         event.preventDefault();
         useEditorStore.getState().setPlaybackEndMs(null);
@@ -127,14 +208,17 @@ export function Workspace() {
         event.preventDefault();
         setPlayhead(useEditorStore.getState().playheadMs - 1000 / editor.project.frameRate);
       }
-      if (event.key.toLowerCase() === "l" && selectedRange) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() !== "z") return;
+      const writable = activeBranch(useEditorStore.getState().editor).status === "working";
+      if (!writable) return;
+      if (!event.metaKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === protectShortcut && selectedRange) {
         const current = activeBranch(useEditorStore.getState().editor);
         dispatch({
           type: "SetLock", actor: { type: "human", surface: "ui" },
-          payload: { action: "lock", branchId: current.branchId, expectedBranchVersion: current.branchVersion, range: selectedRange, label: "Keep pause" },
+          payload: { action: "lock", branchId: current.branchId, expectedBranchVersion: current.branchVersion, range: selectedRange, label: "Protected range" },
         });
       }
-      if (event.key.toLowerCase() === "s") {
+      if (!event.metaKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === splitShortcut) {
         const state = useEditorStore.getState();
         const current = activeBranch(state.editor);
         const selected = state.selectedItemId
@@ -143,8 +227,26 @@ export function Workspace() {
         if (!selected || state.playheadMs <= selected.startMs || state.playheadMs >= selected.endMs) return;
         dispatch({
           type: "ApplyEditBatch", actor: { type: "human", surface: "ui" },
-          payload: { branchId: current.branchId, expectedBranchVersion: current.branchVersion, operations: [{ op: "split", itemId: selected.itemId, atMs: state.playheadMs }] },
+          payload: { branchId: current.branchId, expectedBranchVersion: current.branchVersion, operations: [{ op: "split", itemId: selected.itemId, atMs: Math.round(state.playheadMs) }] },
         });
+      }
+      if (!event.metaKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === markerShortcut) {
+        const state = useEditorStore.getState();
+        const current = activeBranch(state.editor);
+        if (!current.durationMs) return;
+        const startMs = Math.min(state.playheadMs, Math.max(0, current.durationMs - 1));
+        dispatch({
+          type: "AddComment", actor: { type: "human", surface: "ui" },
+          payload: { branchId: current.branchId, expectedBranchVersion: current.branchVersion, range: { startMs, endMs: Math.min(current.durationMs, startMs + Math.max(1, Math.round(1000 / state.editor.project.frameRate))) }, text: "Marker" },
+        });
+      }
+      if (event.key === "Delete" || event.key === "Backspace") {
+        const state = useEditorStore.getState();
+        const current = activeBranch(state.editor);
+        if (!state.selectedItemIds.length) return;
+        event.preventDefault();
+        dispatch({ type: "ApplyEditBatch", actor: { type: "human", surface: "ui" }, payload: { branchId: current.branchId, expectedBranchVersion: current.branchVersion, operations: state.selectedItemIds.map((itemId) => ({ op: "delete" as const, itemId })) } });
+        state.setSelectedItemIds([]);
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
@@ -158,7 +260,7 @@ export function Workspace() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [dispatch, editor.project.frameRate, selectedRange, setPlayhead, setPlaying]);
+  }, [dispatch, editor.project.frameRate, markerShortcut, protectShortcut, selectedRange, setPlayhead, setPlaying, splitShortcut]);
 
   if (!ready) {
     return <div className="loading-screen"><div className="loading-mark"><span /></div><p>Preparing the cut room</p><span>Opening your local project…</span></div>;
@@ -193,6 +295,7 @@ export function Workspace() {
             </button>
           ))}
         </nav>
+        <VersionControls onCompare={() => { setActivityTab("history"); setActivityCollapsed(false); setMobileView("review"); }} />
         <div className="project-readout" aria-label="Current branch details"><span>{branch.crop.aspectRatio}</span><span>v{branch.branchVersion}</span><span>{formatTimecode(branch.durationMs)}</span></div>
         <div className="topbar-actions">
           <div className={`connection-pill ${webMcpConnected ? "is-connected" : ""}`} title={webMcpConnected ? `${agentToolCount} editing actions are available` : "Open Cutline in a WebMCP-capable browser to connect an agent"}>
@@ -206,7 +309,12 @@ export function Workspace() {
             <div className="project-menu-popover">
               <div><strong>{editor.project.title}</strong><span>{saveStatus === "saving" ? "Saving…" : saveStatus === "failed" ? "Save needs attention" : "Saved locally"}</span></div>
               {storageHealth.persisted === false ? <button type="button" onClick={() => void requestPersistentStorage()}>Keep files available</button> : <span className="project-menu-status">Files kept in this browser</span>}
-              <button data-testid="new-project" className="is-danger" type="button" onClick={() => { if (window.confirm("Start a new local project? This removes the current project and its stored media from this browser.")) void newProject(); }}>New local project</button>
+              {projects.length > 1 ? <div className="project-switcher" aria-label="Local projects">{projects.map((project) => <button key={project.projectId} type="button" className={project.projectId === editor.project.projectId ? "is-active" : ""} disabled={project.projectId === editor.project.projectId} onClick={() => void switchProject(project.projectId)}><strong>{project.title}</strong><span>{project.assetCount} media item{project.assetCount === 1 ? "" : "s"}</span></button>)}</div> : null}
+              <button data-testid="new-project" type="button" onClick={() => void newProject()}>New local project</button>
+              <button type="button" onClick={() => void exportProjectFile().then(({ blob, filename }) => { const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = filename; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000); })}>Export project bundle</button>
+              <label className="project-import-button">Import project bundle<input data-testid="import-project" className="sr-only" type="file" accept=".cutline,application/vnd.cutline.project" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importProjectFile(file); event.target.value = ""; }} /></label>
+              <div className="shortcut-settings"><span>Keyboard shortcuts</span><label>Split<input aria-label="Split shortcut" maxLength={1} value={splitShortcut.toUpperCase()} onChange={(event) => { const value = event.target.value.toLowerCase().replace(/[^a-z0-9]/g, ""); if (value && ![protectShortcut, markerShortcut].includes(value)) setSplitShortcut(value); }} /></label><label>Protect<input aria-label="Protect shortcut" maxLength={1} value={protectShortcut.toUpperCase()} onChange={(event) => { const value = event.target.value.toLowerCase().replace(/[^a-z0-9]/g, ""); if (value && ![splitShortcut, markerShortcut].includes(value)) setProtectShortcut(value); }} /></label><label>Marker<input aria-label="Marker shortcut" maxLength={1} value={markerShortcut.toUpperCase()} onChange={(event) => { const value = event.target.value.toLowerCase().replace(/[^a-z0-9]/g, ""); if (value && ![splitShortcut, protectShortcut].includes(value)) setMarkerShortcut(value); }} /></label></div>
+              <button className="is-danger" type="button" onClick={() => { if (window.confirm(`Delete “${editor.project.title}” and its stored media from this browser?`)) void deleteCurrentProject(); }}>Delete current project</button>
             </div>
           </details>
         </div>
@@ -216,7 +324,15 @@ export function Workspace() {
         {(["preview", "timeline", "media", "review"] as const).map((view) => <button key={view} type="button" className={mobileView === view ? "is-active" : ""} aria-pressed={mobileView === view} onClick={() => { setMobileView(view); if (view === "review") setActivityCollapsed(false); }}>{view}</button>)}
       </nav>
 
-      <div className={`workspace-grid ${activityCollapsed ? "is-activity-collapsed" : ""} mobile-view-${mobileView}`}>
+      <div
+        ref={workspaceRef}
+        className={`workspace-grid ${activityCollapsed ? "is-activity-collapsed" : ""} mobile-view-${mobileView}`}
+        style={{
+          "--asset-pane-width": `${assetPaneWidth}px`,
+          "--review-pane-width": `${reviewPaneWidth}px`,
+          "--timeline-pane-height": `${timelineHeight}px`,
+        } as React.CSSProperties}
+      >
         <aside className="asset-panel">
           <div className="asset-scroll panel-scroll">
           <SectionLabel meta={`${editor.assets.length} items`}>Media</SectionLabel>
@@ -240,28 +356,22 @@ export function Workspace() {
           <ul className="asset-list">
             {editor.assets.map((asset) => (
               <li key={asset.assetId} className="asset-card">
-                <div className="asset-thumb">
+                <button type="button" aria-label={`Preview ${asset.label}`} className={`asset-thumb ${asset.availability === "offline" ? "is-offline" : ""}`} onClick={() => { selectSource(asset.assetId); setMobileView("preview"); }}>
                   {asset.posterUri ? <Image src={asset.posterUri} alt="" fill sizes="72px" loading="eager" unoptimized={asset.posterUri.endsWith(".svg")} /> : <Icon name={asset.kind === "audio" ? "audio" : "clip"} size={20} />}
                   <span>{asset.kind}</span>
-                </div>
+                </button>
                 <div className="asset-copy">
-                  <p title={asset.label}>{asset.label}</p><span>{asset.durationMs ? formatTimecode(asset.durationMs) : "Still"}</span>
+                  <p title={asset.label}>{asset.label}</p><span>{asset.availability === "offline" ? "Media offline" : asset.durationMs ? formatTimecode(asset.durationMs) : "Still"}</span>
                   <div className="asset-actions">
-                    {asset.kind !== "audio" ? (
-                      <button className="mini-button is-primary" onClick={() => dispatch({
+                    {asset.availability === "offline" ? <label className="mini-button is-primary relink-button"><Icon name="upload" size={12} /> Relink file<input className="sr-only" type="file" accept={asset.mime} onChange={(event) => { const file = event.target.files?.[0]; if (file) void relinkAsset(asset.assetId, file); event.target.value = ""; }} /></label> : asset.kind !== "audio" ? (
+                      <button className="mini-button is-primary" disabled={branch.status !== "working"} title="Add the full clip at the end of the timeline" onClick={() => dispatch({
                         type: "PlaceClip", actor: { type: "human", surface: "ui" },
                         payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, assetId: asset.assetId, trackId: "v1", startMs: branch.durationMs, durationMs: asset.durationMs ?? 3000, fit: "cover" },
                       })}><Icon name="plus" size={12} /> Add to timeline</button>
                     ) : null}
-                    {asset.kind === "audio" ? <button className="mini-button is-primary" onClick={() => {
-                        const startMs = useEditorStore.getState().playheadMs;
-                        const durationMs = Math.min(asset.durationMs ?? 2000, 8000);
-                        dispatch({ type: "PlaceAudio", actor: { type: "human", surface: "ui" }, payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, assetId: asset.assetId, trackId: "a2", range: { startMs, endMs: startMs + durationMs }, gain: 0.8, transitionIn: "fade_in", transitionOut: "fade_out", fadeMs: 200, replaceExisting: true } });
-                      }}><Icon name="plus" size={12} /> Add at playhead</button> : null}
-                    {asset.kind !== "audio" ? <details className="asset-more"><summary aria-label={`More options for ${asset.label}`}>•••</summary><div>
-                      <button type="button" onClick={() => dispatch({ type: "PlaceClip", actor: { type: "human", surface: "ui" }, payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, assetId: asset.assetId, trackId: "v2", startMs: useEditorStore.getState().playheadMs, durationMs: Math.min(asset.durationMs ?? 3000, 5000), fit: "contain", replaceExisting: true } })}>Add as overlay</button>
-                      {asset.kind === "video" ? <button type="button" onClick={() => { const startMs = useEditorStore.getState().playheadMs; const durationMs = Math.min(asset.durationMs ?? 2000, 8000); dispatch({ type: "PlaceAudio", actor: { type: "human", surface: "ui" }, payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, assetId: asset.assetId, trackId: "a2", range: { startMs, endMs: startMs + durationMs }, gain: 0.8, transitionIn: "fade_in", transitionOut: "fade_out", fadeMs: 200, replaceExisting: true } }); }}>Use audio only</button> : null}
-                    </div></details> : null}
+                    <button className="mini-button" onClick={() => { selectSource(asset.assetId); setMobileView("preview"); }}>Preview &amp; place</button>
+                    {asset.availability !== "offline" && asset.kind === "video" && asset.proxyStatus !== "ready" ? <button className="mini-button" disabled={importJobs.some((job) => job.id === `proxy:${asset.assetId}` && job.status === "reading")} onClick={() => void generateProxy(asset.assetId)}>{asset.proxyStatus === "recommended" ? "Create preview proxy" : "Create proxy"}</button> : null}
+                    {asset.proxyStatus === "ready" ? <span className="asset-proxy-status">480p proxy</span> : null}
                   </div>
                 </div>
               </li>
@@ -311,6 +421,7 @@ export function Workspace() {
             <nav className="activity-tabs" aria-label="Review panel">
               {(["comments", "history", "agent"] as const).map((tab) => <button key={tab} type="button" className={activityTab === tab ? "is-active" : ""} aria-pressed={activityTab === tab} onClick={() => setActivityTab(tab)}>{tab === "agent" ? "Agent" : tab === "history" ? `History ${receipts.length || ""}` : `Comments ${branch.comments.length || ""}`}</button>)}
             </nav>
+            {compare.enabled ? <CompareCard /> : null}
 
             {activityTab === "agent" ? <>
               <AgentGuideCard connected={webMcpConnected} />
@@ -322,12 +433,14 @@ export function Workspace() {
                   <div><dt>Cut</dt><dd>{formatTimecode(branch.durationMs)}</dd></div>
                   <div><dt>{storageHealth.backend === "opfs" ? "OPFS" : "Storage"}</dt><dd>{storageHealth.usedBytes == null ? "Local" : formatStorage(storageHealth.usedBytes)}</dd></div>
                 </dl>
+                <div className="agent-policy-control"><span>Agent changes</span><div className="segmented-control" aria-label="Agent change policy"><button type="button" className={(editor.project.agentMutationPolicy ?? "direct") === "plan_only" ? "is-active" : ""} aria-pressed={(editor.project.agentMutationPolicy ?? "direct") === "plan_only"} onClick={() => setAgentMutationPolicy("plan_only")}>Review first</button><button type="button" className={(editor.project.agentMutationPolicy ?? "direct") === "direct" ? "is-active" : ""} aria-pressed={(editor.project.agentMutationPolicy ?? "direct") === "direct"} onClick={() => setAgentMutationPolicy("direct")}>Direct</button></div><small>{(editor.project.agentMutationPolicy ?? "direct") === "plan_only" ? "The agent can simulate edits with plan_edit but cannot commit them." : "Version checks, locks, and receipts still guard every edit."}</small></div>
                 <div className={`save-health is-${saveStatus}`}><i /><span>{saveStatus === "saving" ? "Saving changes…" : saveStatus === "failed" ? "Local save needs attention" : storageHealth.persisted === false ? "Saved for this browser session" : "Saved in this browser"}</span></div>
                 {storageHealth.persisted === false ? <button className="secondary-button wide" type="button" onClick={() => void requestPersistentStorage()}>Keep files available</button> : null}
                 {hydrationError ? <p className="local-recovery" role="alert">The saved project could not be opened: {hydrationError}. This temporary workspace has not overwritten it.</p> : null}
               </section>
             </> : null}
 
+            <ProtectedRanges />
             {activityTab === "comments" ? <section className="activity-section">
               <SectionLabel meta={selectedRange ? `${formatTimecode(selectedRange.startMs)}–${formatTimecode(selectedRange.endMs)}` : "At playhead"}>Comments</SectionLabel>
               <CommentForm />
@@ -354,12 +467,14 @@ export function Workspace() {
                   </div>
                 </details></li>)}</ul>}
               </section>
-              {compare.enabled ? <CompareCard /> : null}
             </> : null}
           </div>
         </aside>
 
-        <div className="timeline-shell"><Timeline /></div>
+        <div className="timeline-shell"><Timeline splitShortcut={splitShortcut} protectShortcut={protectShortcut} /></div>
+        <div className="pane-resizer is-media" role="separator" aria-label="Resize media panel" aria-orientation="vertical" onPointerDown={(event) => beginPaneResize("media", event)} />
+        {!activityCollapsed ? <div className="pane-resizer is-review" role="separator" aria-label="Resize review panel" aria-orientation="vertical" onPointerDown={(event) => beginPaneResize("review", event)} /> : null}
+        <div className="pane-resizer is-timeline" role="separator" aria-label="Resize timeline" aria-orientation="horizontal" onPointerDown={(event) => beginPaneResize("timeline", event)} />
       </div>
 
       {debug ? <div data-testid="debug-panel" className="debug-panel"><p>ready={String(ready)} project={editor.project.projectId} playing={String(playing)}</p><p data-testid="tool-catalog">tools: {registeredTools.join(", ")}</p></div> : null}
@@ -402,6 +517,56 @@ function AgentGuideCard({ connected }: { connected: boolean }) {
   );
 }
 
+function VersionControls({ onCompare }: { onCompare: () => void }) {
+  const editor = useEditorStore((state) => state.editor);
+  const dispatch = useEditorStore((state) => state.dispatch);
+  const setCompare = useEditorStore((state) => state.setCompare);
+  const menu = useRef<HTMLDetailsElement>(null);
+  const branch = activeBranch(editor);
+  const branches = Object.values(editor.branches);
+  let next = 1;
+  while (branches.some((item) => item.name === `Version ${next}`)) next += 1;
+  const atLimit = branches.length >= 8;
+  return <div className="version-controls">
+    <details ref={menu} className="project-menu version-menu">
+      <summary aria-disabled={atLimit} onClick={(event) => { if (atLimit) event.preventDefault(); }} title={atLimit ? "Eight-version limit reached" : "Create a working copy of this version"}>{branch.status === "accepted" ? "Continue editing from final" : "New version"}</summary>
+      <form className="project-menu-popover" onSubmit={(event) => {
+        event.preventDefault();
+        const name = String(new FormData(event.currentTarget).get("name") ?? "").trim();
+        if (!name) return;
+        const result = dispatch({ type: "CreateBranch", actor: { type: "human", surface: "ui" }, payload: { baseBranchId: branch.branchId, expectedBaseVersion: branch.branchVersion, name } });
+        if (result.ok && menu.current) menu.current.open = false;
+      }}>
+        <label>Version name<input key={`${branch.branchId}-${next}`} name="name" aria-label="Version name" required maxLength={48} defaultValue={`Version ${next}`} /></label>
+        <small>Copy of {branch.name}. The original stays unchanged.</small>
+        <button type="submit" disabled={atLimit}>Create version</button>
+      </form>
+    </details>
+    <button className="secondary-button" type="button" disabled={branches.length < 2} onClick={() => {
+      const other = branches.find((item) => item.branchId === branch.baseBranchId) ?? branches.find((item) => item.branchId !== branch.branchId);
+      if (!other) return;
+      setCompare({ enabled: true, leftId: other.branchId, rightId: branch.branchId, show: "right" });
+      onCompare();
+    }}>Compare versions</button>
+    {atLimit ? <span className="version-limit">8-version limit reached</span> : null}
+  </div>;
+}
+
+function ProtectedRanges() {
+  const editor = useEditorStore((state) => state.editor);
+  const dispatch = useEditorStore((state) => state.dispatch);
+  const setPlayhead = useEditorStore((state) => state.setPlayhead);
+  const setSelectedRange = useEditorStore((state) => state.setSelectedRange);
+  const branch = activeBranch(editor);
+  return <details className="protected-ranges">
+    <summary>Protected ranges <span>{branch.locks.length}</span></summary>
+    {!branch.locks.length ? <p>Select a range and choose Protect to keep it unchanged.</p> : <ul>{branch.locks.map((lock) => <li key={lock.lockId}>
+      <button type="button" className="lock-jump" onClick={() => { setPlayhead(lock.startMs); setSelectedRange({ startMs: lock.startMs, endMs: lock.endMs }); }}><strong>{lock.label}</strong><code>{formatTimecode(lock.startMs)}–{formatTimecode(lock.endMs)}</code></button>
+      <button type="button" className="mini-button" disabled={branch.status !== "working"} title={branch.status !== "working" ? "Create a working version before changing protection" : "Remove only this protection"} onClick={() => dispatch({ type: "SetLock", actor: { type: "human", surface: "ui" }, payload: { action: "unlock", branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, lockId: lock.lockId } })}>Unprotect</button>
+    </li>)}</ul>}
+  </details>;
+}
+
 function CompareCard() {
   const editor = useEditorStore((s) => s.editor);
   const compare = useEditorStore((s) => s.compare);
@@ -417,6 +582,10 @@ function CompareCard() {
   return (
     <section className="compare-card">
       <SectionLabel meta="Previewing one at a time">Compare cuts</SectionLabel>
+      <div className="field-grid">
+        <label>Version A<select aria-label="Version A" value={compare.leftId ?? ""} onChange={(event) => setCompare({ leftId: event.target.value })}>{Object.values(editor.branches).filter((item) => item.branchId !== compare.rightId).map((item) => <option key={item.branchId} value={item.branchId}>{item.name}</option>)}</select></label>
+        <label>Version B<select aria-label="Version B" value={compare.rightId ?? ""} onChange={(event) => setCompare({ rightId: event.target.value })}>{Object.values(editor.branches).filter((item) => item.branchId !== compare.leftId).map((item) => <option key={item.branchId} value={item.branchId}>{item.name}</option>)}</select></label>
+      </div>
       <div className="compare-toggle" aria-label="Cut preview">
         <button className={compare.show === "left" ? "is-active" : ""} aria-pressed={compare.show === "left"} disabled={!left} onClick={() => setCompare({ show: "left" })}>{left?.name ?? "Cut A"}</button>
         <button className={compare.show === "right" ? "is-active" : ""} aria-pressed={compare.show === "right"} disabled={!right} onClick={() => setCompare({ show: "right" })}>{right?.name ?? "Cut B"}</button>
@@ -429,6 +598,7 @@ function CompareCard() {
         onClick={() => dispatch({ type: "AcceptBranch", actor: { type: "human", surface: "ui" }, payload: { branchId: shown.branchId, expectedBranchVersion: shown.branchVersion } })}
       >{accepted ? `${shown.name} accepted` : `Accept ${shown.name}`}</button>
       <p>The cut shown in the Program monitor will be accepted.</p>
+      <button type="button" className="secondary-button wide" onClick={() => setCompare({ enabled: false })}>Exit comparison</button>
     </section>
   );
 }
@@ -446,32 +616,35 @@ function ProjectControls() {
     payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, source: "transcript", preset, emphasis: preset === "bold_center" ? "active_word" : "none", maxLines: 2, maxCharsPerLine: preset === "technical_card" ? 34 : 42 },
   });
   return (
-    <section className="project-controls">
+    <fieldset className="project-controls editor-fieldset" disabled={branch.status !== "working"}>
       <SectionLabel>Format</SectionLabel>
       <div className="segmented-control" aria-label="Aspect ratio">{(["16:9", "9:16", "1:1"] as const).map((ratio) => <button key={ratio} aria-pressed={branch.crop.aspectRatio === ratio} className={branch.crop.aspectRatio === ratio ? "is-active" : ""} onClick={() => setCrop(ratio)}>{ratio}</button>)}</div>
       <label className="compact-field"><span><Icon name="caption" size={14} /> Caption style</span><select disabled={!editor.transcript.length} title={editor.transcript.length ? "Style transcript captions" : "Add a transcript before styling captions"} value={branch.captionStyle.preset} onChange={(event) => styleCaptions(event.target.value as CaptionPreset)}><option value="bold_center">Bold center</option><option value="clean_lower">Clean lower</option><option value="technical_card">Technical card</option></select></label>
-    </section>
+    </fieldset>
   );
 }
 
 function ClipInspector() {
   const editor = useEditorStore((s) => s.editor);
   const selectedItemId = useEditorStore((s) => s.selectedItemId);
+  const selectedItemIds = useEditorStore((s) => s.selectedItemIds);
   const dispatch = useEditorStore((s) => s.dispatch);
   const branch = activeBranch(editor);
   const clip = branch.tracks.flatMap((track) => track.items).find((item) => item.itemId === selectedItemId);
   const track = clip ? branch.tracks.find((entry) => entry.trackId === clip.trackId) : null;
-  if (!clip || !track) return <div className="inspector-empty"><span>S</span><p>Select a timeline clip to adjust audio, fades, or delete it.</p></div>;
+  if (!clip || !track) return <div className="inspector-empty"><Icon name="clip" /><p>Select a timeline clip to adjust audio, fades, or delete it.</p></div>;
   const sortedTrackItems = [...track.items].sort((left, right) => left.startMs - right.startMs || left.itemId.localeCompare(right.itemId));
   const clipIndex = sortedTrackItems.findIndex((item) => item.itemId === clip.itemId);
   const nextCandidate = sortedTrackItems[clipIndex + 1];
   const nextClip = nextCandidate && Math.abs(nextCandidate.startMs - clip.endMs) <= 0.001 ? nextCandidate : null;
   const boundaryTransition = listClipTransitions(track).find((candidate) => candidate.fromItemId === clip.itemId && candidate.toItemId === nextClip?.itemId);
-  const linked = clip.trackId === "v1" ? branch.tracks.find((entry) => entry.trackId === "a1")?.items.find((item) => item.assetId === clip.assetId && item.startMs === clip.startMs && item.endMs === clip.endMs && item.sourceInMs === clip.sourceInMs) : null;
+  const partners = linkedItems(branch, clip.itemId);
+  const linked = partners.length > 1;
+  const selectedForLink = branch.tracks.flatMap((entry) => entry.items).filter((item) => selectedItemIds.includes(item.itemId));
   const editItems = (operation: (itemId: string) => { op: "move"; itemId: string; startMs: number } | { op: "trim"; itemId: string; startMs?: number; endMs?: number } | { op: "delete"; itemId: string }) => dispatch({
     type: "ApplyEditBatch",
     actor: { type: "human", surface: "ui" },
-    payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, operations: [operation(clip.itemId), ...(linked ? [operation(linked.itemId)] : [])] },
+    payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, operations: [operation(clip.itemId)] },
   });
   const transition = (side: "in" | "out", value: Transition) => dispatch({
     type: "SetTransition", actor: { type: "human", surface: "ui" },
@@ -493,7 +666,7 @@ function ClipInspector() {
     });
   };
   return (
-    <section className="clip-inspector">
+    <fieldset className="clip-inspector editor-fieldset" disabled={branch.status !== "working"}>
       <SectionLabel meta={track.trackId.toUpperCase()}>Selected clip</SectionLabel><p className="inspector-title">{clip.label}</p>
       <div className="time-field-grid">
         <label>Start (ms)<input key={`${clip.itemId}-start-${clip.startMs}`} type="number" min={0} step={Math.round(1000 / editor.project.frameRate)} defaultValue={Math.round(clip.startMs)} onBlur={(event) => { const startMs = Number(event.currentTarget.value); if (Number.isFinite(startMs) && startMs >= 0 && startMs !== clip.startMs) editItems((itemId) => ({ op: "move", itemId, startMs })); }} /></label>
@@ -503,8 +676,8 @@ function ClipInspector() {
       <div className="field-grid"><label>In<select value={clip.transitionIn ?? "cut"} onChange={(event) => transition("in", event.target.value as Transition)}>{transitionOptions()}</select></label><label>Out<select value={clip.transitionOut ?? "cut"} onChange={(event) => transition("out", event.target.value as Transition)}>{transitionOptions()}</select></label></div>
       <label className="compact-field"><span>Fade duration</span><input type="number" min={0} max={5000} step={50} value={clip.fadeMs ?? 0} onChange={(event) => dispatch({ type: "SetTransition", actor: { type: "human", surface: "ui" }, payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, itemId: clip.itemId, fadeMs: Number(event.target.value) } })} /></label>
       {nextClip && (track.kind === "video" || track.kind === "video_overlay") ? <div className="field-grid"><label>To next clip<select value={boundaryTransition?.transition ?? "cut"} onChange={(event) => transitionToNext(event.target.value as "cut" | BasicClipTransition)}>{betweenClipTransitionOptions()}</select></label><label>Duration (ms)<input type="number" min={50} max={5000} step={50} disabled={!boundaryTransition} value={boundaryTransition?.durationMs ?? 400} onChange={(event) => { if (boundaryTransition) transitionToNext(boundaryTransition.transition, Number(event.target.value)); }} /></label></div> : null}
-      <div className="inspector-actions"><button className="secondary-button" onClick={() => dispatch({ type: "MuteTrack", actor: { type: "human", surface: "ui" }, payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, trackId: track.trackId, muted: !track.muted } })}>{track.muted ? "Unmute track" : "Mute track"}</button><button className="danger-button" onClick={() => editItems((itemId) => ({ op: "delete", itemId }))}>Delete{linked ? " linked" : ""}</button></div>
-    </section>
+      <div className="inspector-actions">{linked ? <button className="secondary-button" onClick={() => dispatch({ type: "ApplyEditBatch", actor: { type: "human", surface: "ui" }, payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, operations: [{ op: "set_link", itemIds: partners.map((item) => item.itemId), linked: false }] } })}>Unlink A/V</button> : selectedForLink.length > 1 ? <button className="secondary-button" onClick={() => dispatch({ type: "ApplyEditBatch", actor: { type: "human", surface: "ui" }, payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, operations: [{ op: "set_link", itemIds: selectedForLink.map((item) => item.itemId), linked: true }] } })}>Link selected</button> : <button className="secondary-button" onClick={() => dispatch({ type: "MuteTrack", actor: { type: "human", surface: "ui" }, payload: { branchId: branch.branchId, expectedBranchVersion: branch.branchVersion, trackId: track.trackId, muted: !track.muted } })}>{track.muted ? "Unmute track" : "Mute track"}</button>}<button className="danger-button" onClick={() => editItems((itemId) => ({ op: "delete", itemId }))}>Delete{linked ? " linked" : ""}</button></div>
+    </fieldset>
   );
 }
 
