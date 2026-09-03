@@ -42,13 +42,11 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000). No environment variables, accounts, or cloud services are required. Add `?debug=1` to display the registered WebMCP tools and project diagnostics.
 
-To try the complete flow quickly, open the **Agent** panel and choose **Load the guided sample**.
-
 ## Use with a WebMCP agent
 
 1. Open Cutline in a WebMCP-capable browser.
 2. Wait for the header status to show **Agent connected**.
-3. Import local media or load the guided sample project.
+3. Import local media.
 4. Ask the agent to inspect the project before editing.
 5. Review its branch, receipts, changed ranges, and preview before choosing a final cut.
 

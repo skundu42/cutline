@@ -4,7 +4,6 @@ import { compareBranches, formatTimecode, listClipTransitions } from "@/core";
 import { readMappedTranscript } from "@/core/reducer";
 import { linkedItems } from "@/core/linked";
 import type { BasicClipTransition, CaptionPreset, Transition } from "@/core/types";
-import { WINNING_PROMPT } from "@/demo/manifest";
 import { activeBranch, useEditorStore } from "@/store/editorStore";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -487,13 +486,10 @@ function formatStorage(bytes: number) {
 }
 
 function AgentGuideCard({ connected }: { connected: boolean }) {
-  const editor = useEditorStore((s) => s.editor);
-  const loadSampleProject = useEditorStore((s) => s.loadSampleProject);
   const [copied, setCopied] = useState(false);
-  const hasWork = editor.assets.length > 0 || activeBranch(editor).durationMs > 0;
   const copyPrompt = async () => {
     try {
-      await navigator.clipboard.writeText(WINNING_PROMPT);
+      await navigator.clipboard.writeText("Inspect this project, create a new working branch, turn it into a punchy short, preserve protected ranges, and show me exactly what changed.");
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1800);
     } catch {
@@ -507,7 +503,6 @@ function AgentGuideCard({ connected }: { connected: boolean }) {
       <blockquote>“Turn this into a punchy short. Create a new branch, preserve protected ranges, and show me what changed.”</blockquote>
       <div className="prompt-actions">
         <button className="primary-button" type="button" onClick={() => void copyPrompt()}><Icon name="copy" size={14} /> {copied ? "Prompt copied" : "Copy prompt for Codex"}</button>
-        <button className="text-button" type="button" onClick={() => { if (!hasWork || window.confirm("Replace this local workspace with the sample KV Cache project?")) void loadSampleProject(); }}>Load the guided sample</button>
       </div>
       {!connected ? <small>Open Cutline in a WebMCP-capable browser to connect an editing agent.</small> : null}
     </section>

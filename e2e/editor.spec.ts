@@ -44,6 +44,7 @@ test("starts as a content-agnostic local workspace", async ({ page }) => {
   await expect(page.getByText("Cutline", { exact: true })).toBeVisible();
   await expect(page.getByText("Make your first cut")).toBeVisible();
   await expect(page.getByTestId("viewer-upload-media")).toBeAttached();
+  await expect(page.getByRole("button", { name: /sample/i })).toHaveCount(0);
   await expect(page.getByLabel("Project name")).toHaveValue("Untitled cut");
   await expect(page.getByText("Your files stay in this browser")).toBeVisible();
   await expect(page.getByTestId("export-button")).toBeDisabled();
@@ -148,32 +149,32 @@ test("attaches and collapses a local transcript", async ({ page }) => {
 });
 
 test("an agent can plan, branch, edit, verify, compare, and accept a cut", async ({ page }) => {
-  await installWebMcpHost(page);
-  await page.goto("/?debug=1");
-  await page.getByRole("button", { name: "Agent", exact: true }).click();
-  await page.getByRole("button", { name: "Load the guided sample" }).click();
+  await openLocalFixture(page);
   await expect(page.getByText("Agent connected")).toBeVisible();
 
   const result = await page.evaluate(async () => {
     const tools = (window as typeof window & { __cutlineTools: Record<string, { execute: (input: unknown) => Promise<unknown> }> }).__cutlineTools;
-    const inspected = await tools.inspect_project.execute({ projectId: "proj_kv_demo_v1" }) as { project: { activeBranchId: string } };
-    const created = await tools.create_cut_branch.execute({ projectId: "proj_kv_demo_v1", baseBranchId: inspected.project.activeBranchId, expectedBaseVersion: 0, name: "Browser agent cut" }) as { branchId: string };
-    const operations = [{ op: "ripple_delete", range: { startMs: 70_000, endMs: 74_000 } }];
-    const plan = await tools.plan_edit.execute({ projectId: "proj_kv_demo_v1", branchId: created.branchId, expectedBranchVersion: 0, rationale: "Shorten the tail", operations }) as { committed: boolean; projectedStateDigest: string };
-    const applied = await tools.apply_edit_batch.execute({ projectId: "proj_kv_demo_v1", branchId: created.branchId, expectedBranchVersion: 0, rationale: "Shorten the tail", operations }) as { stateDigest: string; branchVersion: number };
-    const preview = await tools.preview_range.execute({ projectId: "proj_kv_demo_v1", branchId: created.branchId, stateDigest: applied.stateDigest, startMs: 68_000, endMs: 70_000 });
-    const locked = await tools.lock_range.execute({ projectId: "proj_kv_demo_v1", branchId: created.branchId, expectedBranchVersion: 1, range: { startMs: 1000, endMs: 2000 }, label: "Approved opening" }) as { branchVersion: number };
-    const lockedPlan = await tools.plan_edit.execute({ projectId: "proj_kv_demo_v1", branchId: created.branchId, expectedBranchVersion: locked.branchVersion, operations: [{ op: "split", itemId: "c_v1_take1", atMs: 1500 }] });
-    const compared = await tools.compare_cuts.execute({ projectId: "proj_kv_demo_v1", leftBranchId: inspected.project.activeBranchId, rightBranchId: created.branchId });
-    const accepted = await tools.accept_branch.execute({ projectId: "proj_kv_demo_v1", branchId: created.branchId, expectedBranchVersion: locked.branchVersion });
+    const status = await tools.project_status.execute({}) as { projectId: string };
+    const inspected = await tools.inspect_project.execute({ projectId: status.projectId }) as { project: { activeBranchId: string } };
+    const timeline = await tools.get_timeline.execute({ projectId: status.projectId, branchId: inspected.project.activeBranchId }) as { branchVersion: number; tracks: { trackId: string; items: { itemId: string }[] }[] };
+    const itemId = timeline.tracks.find((track) => track.trackId === "v1")!.items[0].itemId;
+    const created = await tools.create_cut_branch.execute({ projectId: status.projectId, baseBranchId: inspected.project.activeBranchId, expectedBaseVersion: timeline.branchVersion, name: "Browser agent cut" }) as { branchId: string };
+    const operations = [{ op: "ripple_delete", range: { startMs: 1500, endMs: 2000 } }];
+    const plan = await tools.plan_edit.execute({ projectId: status.projectId, branchId: created.branchId, expectedBranchVersion: 0, rationale: "Shorten the tail", operations }) as { committed: boolean; projectedStateDigest: string };
+    const applied = await tools.apply_edit_batch.execute({ projectId: status.projectId, branchId: created.branchId, expectedBranchVersion: 0, rationale: "Shorten the tail", operations }) as { stateDigest: string; branchVersion: number };
+    const preview = await tools.preview_range.execute({ projectId: status.projectId, branchId: created.branchId, stateDigest: applied.stateDigest, startMs: 1000, endMs: 1500 });
+    const locked = await tools.lock_range.execute({ projectId: status.projectId, branchId: created.branchId, expectedBranchVersion: 1, range: { startMs: 100, endMs: 200 }, label: "Approved opening" }) as { branchVersion: number };
+    const lockedPlan = await tools.plan_edit.execute({ projectId: status.projectId, branchId: created.branchId, expectedBranchVersion: locked.branchVersion, operations: [{ op: "split", itemId, atMs: 150 }] });
+    const compared = await tools.compare_cuts.execute({ projectId: status.projectId, leftBranchId: inspected.project.activeBranchId, rightBranchId: created.branchId });
+    const accepted = await tools.accept_branch.execute({ projectId: status.projectId, branchId: created.branchId, expectedBranchVersion: locked.branchVersion });
     return { plan, applied, preview, lockedPlan, compared, accepted, branchId: created.branchId };
   });
 
   expect(result.plan).toMatchObject({ committed: false });
   expect(result.applied).toMatchObject({ branchVersion: 1 });
-  expect(result.preview).toMatchObject({ mode: "shared_viewer", startMs: 68_000, endMs: 70_000 });
+  expect(result.preview).toMatchObject({ mode: "shared_viewer", startMs: 1000, endMs: 1500 });
   expect(result.lockedPlan).toMatchObject({ error: { code: "LOCKED_RANGE" } });
-  expect(result.compared).toHaveProperty("delta.durationDeltaMs", -4000);
+  expect(result.compared).toHaveProperty("delta.durationDeltaMs", -500);
   expect(result.accepted).toMatchObject({ selectedFinalBranchId: result.branchId });
   await expect(page.getByTestId("branch-Browser agent cut")).toBeVisible();
 });

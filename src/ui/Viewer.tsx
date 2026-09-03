@@ -78,7 +78,6 @@ function TimelineViewer() {
   const setPlaying = useEditorStore((s) => s.setPlaying);
   const setPlaybackEndMs = useEditorStore((s) => s.setPlaybackEndMs);
   const importFiles = useEditorStore((s) => s.importFiles);
-  const loadSampleProject = useEditorStore((s) => s.loadSampleProject);
   const dispatch = useEditorStore((s) => s.dispatch);
   const compare = useEditorStore((s) => s.compare);
   const comparedBranchId = compare.show === "right" ? compare.rightId : compare.leftId;
@@ -213,7 +212,6 @@ function TimelineViewer() {
               {editor.assets.length === 0 ? (
                 <div className="viewer-empty-actions">
                   <label className="viewer-import-button">Import media<input data-testid="viewer-upload-media" className="sr-only" type="file" multiple accept="video/mp4,video/webm,audio/mpeg,audio/mp4,audio/wav,audio/webm,image/png,image/jpeg,image/webp,image/svg+xml" onChange={(event) => { const files = Array.from(event.target.files ?? []); if (files.length) void importFiles(files); event.target.value = ""; }} /></label>
-                  <button type="button" onClick={() => void loadSampleProject()}>Try the sample</button>
                 </div>
               ) : firstVisualAsset && branch.durationMs === 0 ? <button className="viewer-next-step" type="button" onClick={addFirstVisual}>Add {firstVisualAsset.label} to timeline</button> : null}
             </div>

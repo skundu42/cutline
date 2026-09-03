@@ -18,7 +18,7 @@ Cutline is an in-browser, local-first nonlinear video editor designed for a huma
 
 As of 2026-08-31, the repository is a functional, tested challenge prototype rather than an early scaffold:
 
-- The default route opens a content-agnostic empty project and can load an optional guided KV-cache demo.
+- The default route opens a content-agnostic empty project.
 - Users can import local video, audio, still images, SVG graphics, and SRT/VTT transcripts without an upload service.
 - The editor has a working viewer, multi-track timeline, direct clip manipulation, inspector, comments, locks, branch review, undo/redo, responsive layouts, and local export.
 - A WebMCP bridge dynamically exposes 36 semantic tools over the same store and reducer used by the UI, including a non-committing edit planner.
@@ -233,8 +233,8 @@ Output sizes are 1280x720/720x1280/720x720 for 720p and 854x480/480x854/480x480 
 | `src/media/` | Worker inspection, local capability checks, browser render/export |
 | `src/webmcp/` | Tool catalog, Zod schemas, lifecycle registration, handlers |
 | `src/ui/` | Workspace, viewer, timeline, inspector/review, export modal |
-| `src/demo/` | Optional deterministic KV-cache sample and golden edit recipe |
-| `public/demo/` | Bundled sample media and rendered WebMCP explainer clips |
+| `src/demo/` | Deterministic KV-cache fixtures and golden edit recipe |
+| `public/demo/` | Bundled test media and rendered WebMCP explainer clips |
 | `videos/webmcp-demo-clips/` | Separate Motion Canvas source project; excluded from root TypeScript |
 | `e2e/` | Browser-level product flows |
 | `docs/PRD.md` | Historical challenge specification, not current authority |

@@ -2,7 +2,6 @@ import { create } from "zustand";
 import { sha256 } from "js-sha256";
 import { applyCommand, createEmptyState, digestBranch, digestProject, kindFromMime, parseTranscriptText, validateImport } from "@/core";
 import type { Actor, Command, EditorState, Receipt, Result, TimeRange } from "@/core/types";
-import { createSeedState } from "@/demo/manifest";
 import { renderBranchLocally, type RenderFormat, type RenderPreset } from "@/media/export";
 import { inspectMediaFile } from "@/media/localMedia";
 import {
@@ -99,7 +98,6 @@ interface EditorStore {
   importFiles: (files: File[]) => Promise<Result[]>;
   importTranscriptFile: (file: File) => Promise<Result>;
   cancelImports: () => void;
-  loadSampleProject: () => Promise<void>;
   refreshStorageHealth: () => Promise<void>;
   setAgentMutationPolicy: (policy: "direct" | "plan_only") => void;
   newProject: () => Promise<void>;
@@ -496,21 +494,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       importsCancelled: true,
       importJobs: store.importJobs.map((job) => job.status === "reading" || job.status === "storing" ? { ...job, status: "cancelled", message: "Cancelled" } : job),
     }));
-  },
-
-  loadSampleProject: async () => {
-    for (const controller of proxyControllers.values()) controller.abort();
-    proxyControllers.clear();
-    renderController?.abort();
-    renderController = null;
-    revokeRenderUrl(get().renderState);
-    await flushPersistence();
-    const editor = createSeedState(Date.now());
-    set({ editor, ready: true, readyAt: Date.now(), hydrationError: null, ...resetInteractionState() });
-    persist(editor, (saveStatus, error) => set({ saveStatus, ...(error ? { lastError: `LOCAL_SAVE: ${error}` } : {}) }));
-    await flushPersistence();
-    set({ projects: await listProjects() });
-    await get().refreshStorageHealth();
   },
 
   refreshStorageHealth: async () => {
