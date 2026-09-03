@@ -94,7 +94,6 @@ export function Workspace() {
   const generateProxy = useEditorStore((s) => s.generateProxy);
   const projects = useEditorStore((s) => s.projects);
   const setAgentMutationPolicy = useEditorStore((s) => s.setAgentMutationPolicy);
-  const requestPersistentStorage = useEditorStore((s) => s.requestPersistentStorage);
   const clearError = useEditorStore((s) => s.clearError);
   const setExportOpen = useEditorStore((s) => s.setExportOpen);
   const setSelectedRange = useEditorStore((s) => s.setSelectedRange);
@@ -308,7 +307,6 @@ export function Workspace() {
             <summary>Project</summary>
             <div className="project-menu-popover">
               <div><strong>{editor.project.title}</strong><span>{saveStatus === "saving" ? "Saving…" : saveStatus === "failed" ? "Save needs attention" : "Saved locally"}</span></div>
-              {storageHealth.persisted === false ? <button type="button" onClick={() => void requestPersistentStorage()}>Keep files available</button> : <span className="project-menu-status">Files kept in this browser</span>}
               {projects.length > 1 ? <div className="project-switcher" aria-label="Local projects">{projects.map((project) => <button key={project.projectId} type="button" className={project.projectId === editor.project.projectId ? "is-active" : ""} disabled={project.projectId === editor.project.projectId} onClick={() => void switchProject(project.projectId)}><strong>{project.title}</strong><span>{project.assetCount} media item{project.assetCount === 1 ? "" : "s"}</span></button>)}</div> : null}
               <button data-testid="new-project" type="button" onClick={() => void newProject()}>New local project</button>
               <button type="button" onClick={() => void exportProjectFile().then(({ blob, filename }) => { const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = filename; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000); })}>Export project bundle</button>
@@ -434,8 +432,7 @@ export function Workspace() {
                   <div><dt>{storageHealth.backend === "opfs" ? "OPFS" : "Storage"}</dt><dd>{storageHealth.usedBytes == null ? "Local" : formatStorage(storageHealth.usedBytes)}</dd></div>
                 </dl>
                 <div className="agent-policy-control"><span>Agent changes</span><div className="segmented-control" aria-label="Agent change policy"><button type="button" className={(editor.project.agentMutationPolicy ?? "direct") === "plan_only" ? "is-active" : ""} aria-pressed={(editor.project.agentMutationPolicy ?? "direct") === "plan_only"} onClick={() => setAgentMutationPolicy("plan_only")}>Review first</button><button type="button" className={(editor.project.agentMutationPolicy ?? "direct") === "direct" ? "is-active" : ""} aria-pressed={(editor.project.agentMutationPolicy ?? "direct") === "direct"} onClick={() => setAgentMutationPolicy("direct")}>Direct</button></div><small>{(editor.project.agentMutationPolicy ?? "direct") === "plan_only" ? "The agent can simulate edits with plan_edit but cannot commit them." : "Version checks, locks, and receipts still guard every edit."}</small></div>
-                <div className={`save-health is-${saveStatus}`}><i /><span>{saveStatus === "saving" ? "Saving changes…" : saveStatus === "failed" ? "Local save needs attention" : storageHealth.persisted === false ? "Saved for this browser session" : "Saved in this browser"}</span></div>
-                {storageHealth.persisted === false ? <button className="secondary-button wide" type="button" onClick={() => void requestPersistentStorage()}>Keep files available</button> : null}
+                <div className={`save-health is-${saveStatus}`}><i /><span>{saveStatus === "saving" ? "Saving changes…" : saveStatus === "failed" ? "Local save needs attention" : "Saved in this browser"}</span></div>
                 {hydrationError ? <p className="local-recovery" role="alert">The saved project could not be opened: {hydrationError}. This temporary workspace has not overwritten it.</p> : null}
               </section>
             </> : null}

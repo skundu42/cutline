@@ -48,7 +48,6 @@ export interface ImportJob {
 export interface StorageHealth {
   usedBytes: number | null;
   quotaBytes: number | null;
-  persisted: boolean | null;
   backend: "opfs" | "indexeddb" | null;
 }
 
@@ -102,7 +101,6 @@ interface EditorStore {
   cancelImports: () => void;
   loadSampleProject: () => Promise<void>;
   refreshStorageHealth: () => Promise<void>;
-  requestPersistentStorage: () => Promise<boolean>;
   setAgentMutationPolicy: (policy: "direct" | "plan_only") => void;
   newProject: () => Promise<void>;
   deleteCurrentProject: () => Promise<void>;
@@ -290,7 +288,7 @@ function initialEditor(saved: EditorState | null, now: number) {
   return saved ?? createEmptyState(now);
 }
 
-const emptyStorageHealth = (): StorageHealth => ({ usedBytes: null, quotaBytes: null, persisted: null, backend: null });
+const emptyStorageHealth = (): StorageHealth => ({ usedBytes: null, quotaBytes: null, backend: null });
 
 export const useEditorStore = create<EditorStore>((set, get) => ({
   editor: createEmptyState(),
@@ -521,29 +519,14 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       return;
     }
     try {
-      const [estimate, persisted] = await Promise.all([
-        navigator.storage.estimate(),
-        navigator.storage.persisted?.() ?? Promise.resolve(null),
-      ]);
+      const estimate = await navigator.storage.estimate();
       set({ storageHealth: {
         usedBytes: estimate.usage ?? null,
         quotaBytes: estimate.quota ?? null,
-        persisted,
         backend: getLocalStorageBackend(),
       } });
     } catch {
       set({ storageHealth: emptyStorageHealth() });
-    }
-  },
-
-  requestPersistentStorage: async () => {
-    if (typeof navigator === "undefined" || !navigator.storage?.persist) return false;
-    try {
-      const persisted = await navigator.storage.persist();
-      await get().refreshStorageHealth();
-      return persisted;
-    } catch {
-      return false;
     }
   },
 

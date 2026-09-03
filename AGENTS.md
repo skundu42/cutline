@@ -198,7 +198,7 @@ UI file imports are limited to 500 MB each. Accepted MIME types include MP4, Web
 - `.cutline` bundles carry a validated manifest and concatenated original media payloads, remap imported project/asset identities, and omit disposable proxy files.
 - Hydration has an 8-second timeout. On failure, the UI opens a temporary empty workspace and surfaces a storage error.
 
-Storage usage, quota, persistence status, and backend are visible in the Agent/debug surface. The project menu can request persistent browser storage.
+Storage usage and backend are visible in the Agent/debug surface.
 
 ### Render pipeline
 

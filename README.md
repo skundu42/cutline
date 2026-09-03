@@ -168,7 +168,6 @@ Cutline is a standard Next.js application and includes `vercel.json` for automat
 ## Privacy and current limitations
 
 - Project data is scoped to the current browser origin and may be cleared by browser storage controls; export `.cutline` bundles for portable backups.
-- Request persistent storage from the Project menu when the browser offers it.
 - Local render formats depend on codecs exposed by `MediaRecorder` and WebCodecs; Chromium currently provides the broadest support.
 - Video timelines render in real time in the active tab. Hiding the tab pauses progress safely, but there is no background render worker or resumable render job.
 - There is no cloud sync, real-time multi-user collaboration, remote publishing destination, or built-in speech-to-text.
