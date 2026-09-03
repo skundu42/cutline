@@ -36,13 +36,22 @@ export const GetTimelineInput = z.object({
   include: z.array(z.enum(["clips", "captions", "comments", "locks"])).optional(),
 });
 
-export const ReadTranscriptInput = z.object({
+const ReadTranscriptBaseInput = z.object({
   projectId: z.string(),
   branchId: z.string(),
-  range: TimeRangeSchema.optional(),
-  includeWords: z.boolean().optional(),
   cursor: z.string().optional(),
 });
+
+export const ReadTranscriptInput = z.union([
+  ReadTranscriptBaseInput.extend({
+    includeWords: z.literal(true),
+    range: TimeRangeSchema,
+  }),
+  ReadTranscriptBaseInput.extend({
+    includeWords: z.literal(false).optional(),
+    range: TimeRangeSchema.optional(),
+  }),
+]);
 
 const TranscriptWordInput = z.object({
   startMs: z.number().int().nonnegative(),

@@ -104,7 +104,7 @@ export function Workspace() {
   const renderStatus = useEditorStore((s) => s.renderState.status);
   const [transcriptCollapsed, setTranscriptCollapsed] = useState(true);
   const [activityCollapsed, setActivityCollapsed] = useState(false);
-  const [activityTab, setActivityTab] = useState<ActivityTab>("comments");
+  const [activityTab, setActivityTab] = useState<ActivityTab>("agent");
   const [mobileView, setMobileView] = useState<MobileView>("preview");
   const [assetPaneWidth, setAssetPaneWidth] = useState(284);
   const [reviewPaneWidth, setReviewPaneWidth] = useState(320);

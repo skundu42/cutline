@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AddTransitionInput, jsonSchema, InspectProjectInput, ApplyEditBatchInput, ControlPlaybackInput, LockRangeInput, TimeRangeSchema } from "./schemas";
+import { AddTransitionInput, jsonSchema, InspectProjectInput, ApplyEditBatchInput, ControlPlaybackInput, LockRangeInput, ReadTranscriptInput, TimeRangeSchema } from "./schemas";
 import { P0_TOOL_NAMES } from "./catalog";
 
 describe("webmcp contract", () => {
@@ -65,5 +65,13 @@ describe("webmcp contract", () => {
   it("rejects inverted ranges and invalid playback actions", () => {
     expect(TimeRangeSchema.safeParse({ startMs: 2000, endMs: 1000 }).success).toBe(false);
     expect(ControlPlaybackInput.safeParse({ projectId: "p", branchId: "b", action: "scrub" }).success).toBe(false);
+  });
+
+  it("requires a range when transcript words are requested", () => {
+    const input = { projectId: "p", branchId: "b", includeWords: true };
+    expect(ReadTranscriptInput.safeParse(input).success).toBe(false);
+    expect(jsonSchema(ReadTranscriptInput)).toMatchObject({
+      anyOf: [expect.objectContaining({ required: expect.arrayContaining(["range"]) }), expect.any(Object)],
+    });
   });
 });
