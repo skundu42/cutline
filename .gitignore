@@ -25,6 +25,8 @@ node_modules/
 # Generated visual artifacts
 output/
 screenshots/
+/videos/cutline-webmcp-clips/renders/
+/videos/cutline-webmcp-clips/snapshots/
 
 # Next.js, build output, and caches
 /.next/

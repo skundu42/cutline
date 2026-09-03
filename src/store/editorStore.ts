@@ -76,7 +76,6 @@ interface EditorStore {
   saveStatus: "saved" | "saving" | "failed";
   storageHealth: StorageHealth;
   importJobs: ImportJob[];
-  importsCancelled: boolean;
   playheadMs: number;
   playing: boolean;
   playbackEndMs: number | null;
@@ -97,7 +96,6 @@ interface EditorStore {
   importFile: (file: File) => Promise<Result>;
   importFiles: (files: File[]) => Promise<Result[]>;
   importTranscriptFile: (file: File) => Promise<Result>;
-  cancelImports: () => void;
   refreshStorageHealth: () => Promise<void>;
   setAgentMutationPolicy: (policy: "direct" | "plan_only") => void;
   newProject: () => Promise<void>;
@@ -169,12 +167,11 @@ async function flushPersistence() {
   await saveChain.catch(() => undefined);
 }
 
-async function contentChecksum(file: File, isCancelled: () => boolean) {
+async function contentChecksum(file: File) {
   const hasher = sha256.create();
   const reader = file.stream().getReader();
   try {
     while (true) {
-      if (isCancelled()) throw new DOMException("Import cancelled", "AbortError");
       const { done, value } = await reader.read();
       if (done) break;
       hasher.update(value);
@@ -232,7 +229,6 @@ function resetInteractionState() {
     exportOpen: false,
     renderState: emptyRenderState(),
     importJobs: [] as ImportJob[],
-    importsCancelled: false,
   };
 }
 
@@ -400,13 +396,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       return { ok: false, error: invalid };
     }
     try {
-      if (get().importsCancelled) throw new DOMException("Import cancelled", "AbortError");
-      const checksum = await contentChecksum(file, () => get().importsCancelled);
+      const checksum = await contentChecksum(file);
       if (get().editor.assets.some((asset) => asset.checksum === checksum)) {
         throw new Error(`${file.name} is already in this project`);
       }
       const [probe, posterUri, waveformPeaks] = await Promise.all([inspectMediaFile(file), posterFor(file), waveformFor(file)]);
-      if (get().importsCancelled) throw new DOMException("Import cancelled", "AbortError");
       updateJob("storing");
       const assetId = typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID()
@@ -449,22 +443,17 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       await get().refreshStorageHealth();
       return result;
     } catch (error) {
-      const cancelled = error instanceof DOMException && error.name === "AbortError";
       const message = error instanceof Error ? error.message : "The media file could not be stored locally";
       const failure: Result = { ok: false, error: { code: "VALIDATION_ERROR", message } };
-      updateJob(cancelled ? "cancelled" : "failed", message);
-      if (!cancelled) set({ lastError: `VALIDATION_ERROR: ${message}` });
+      updateJob("failed", message);
+      set({ lastError: `VALIDATION_ERROR: ${message}` });
       return failure;
     }
   },
 
   importFiles: async (files) => {
-    set({ importsCancelled: false });
     const results: Result[] = [];
-    for (const file of files) {
-      if (get().importsCancelled) break;
-      results.push(await get().importFile(file));
-    }
+    for (const file of files) results.push(await get().importFile(file));
     return results;
   },
 
@@ -485,15 +474,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       set({ lastError: `TRANSCRIPT: ${message}` });
       return failure;
     }
-  },
-
-  cancelImports: () => {
-    for (const controller of proxyControllers.values()) controller.abort();
-    proxyControllers.clear();
-    set((store) => ({
-      importsCancelled: true,
-      importJobs: store.importJobs.map((job) => job.status === "reading" || job.status === "storing" ? { ...job, status: "cancelled", message: "Cancelled" } : job),
-    }));
   },
 
   refreshStorageHealth: async () => {
@@ -597,7 +577,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const asset = state.assets.find((candidate) => candidate.assetId === assetId);
     if (!asset) return false;
     try {
-      const checksum = await contentChecksum(file, () => false);
+      const checksum = await contentChecksum(file);
       if (asset.checksumAlgorithm === "sha256-content" && asset.checksum && checksum !== asset.checksum) {
         throw new Error("This file does not match the original media. Choose the original file used by this project.");
       }

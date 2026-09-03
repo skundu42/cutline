@@ -80,7 +80,6 @@ export function Workspace() {
   const importFiles = useEditorStore((s) => s.importFiles);
   const importTranscriptFile = useEditorStore((s) => s.importTranscriptFile);
   const importJobs = useEditorStore((s) => s.importJobs);
-  const cancelImports = useEditorStore((s) => s.cancelImports);
   const saveStatus = useEditorStore((s) => s.saveStatus);
   const storageHealth = useEditorStore((s) => s.storageHealth);
   const hydrationError = useEditorStore((s) => s.hydrationError);
@@ -342,12 +341,6 @@ export function Workspace() {
               onChange={(event) => { const files = Array.from(event.target.files ?? []); if (files.length) void importFiles(files); event.target.value = ""; }}
             />
           </label>
-          {importJobs.length ? (
-            <div className="import-queue" aria-live="polite">
-              <div className="import-queue-heading"><span>Recent imports</span>{importJobs.some((job) => job.status === "reading" || job.status === "storing") ? <button type="button" onClick={cancelImports}>Cancel</button> : null}</div>
-              {importJobs.slice(0, 3).map((job) => <div key={job.id} className={`import-job is-${job.status}`}><i /><span title={job.name}>{job.name}</span><small>{job.status === "reading" ? "Reading media" : job.status === "storing" ? "Saving locally" : job.message ?? job.status}</small></div>)}
-            </div>
-          ) : null}
           {lastError?.startsWith("VALIDATION_ERROR") ? <div className="inline-error" role="alert">{lastError.replace("VALIDATION_ERROR: ", "")}</div> : null}
           <ul className="asset-list">
             {editor.assets.map((asset) => (

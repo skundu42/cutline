@@ -46,7 +46,7 @@ test("starts as a content-agnostic local workspace", async ({ page }) => {
   await expect(page.getByTestId("viewer-upload-media")).toBeAttached();
   await expect(page.getByRole("button", { name: /sample/i })).toHaveCount(0);
   await expect(page.getByLabel("Project name")).toHaveValue("Untitled cut");
-  await expect(page.getByText("Your files stay in this browser")).toBeVisible();
+  await expect(page.getByText("Your files stay in this browser")).toHaveCount(0);
   await expect(page.getByTestId("export-button")).toBeDisabled();
 
   const catalog = await page.getByTestId("tool-catalog").innerText();
@@ -66,7 +66,8 @@ test("uploads, edits, and persists local media", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("upload-media").setInputFiles("public/demo/brand_sting.mp4");
 
-  await expect(page.getByText("brand_sting").first()).toBeVisible();
+  await expect(page.locator(".asset-card").getByText("brand_sting", { exact: true })).toBeVisible();
+  await expect(page.getByText("Recent imports")).toHaveCount(0);
   await expect(page.getByLabel("Project name")).toHaveValue("brand_sting");
   await page.getByRole("button", { name: "Add to timeline" }).click();
   await expect(page.getByRole("button", { name: "brand_sting, 00:00.000 to 00:02.000" })).toHaveCount(2);

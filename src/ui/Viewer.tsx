@@ -227,7 +227,6 @@ function TimelineViewer({ branch }: { branch: Branch }) {
             <img src={v2IncomingAsset.uri} alt={v2IncomingAsset.label} className="program-media overlay-media transition-incoming contain" style={transitionLayerStyle({ ...v2TransitionFrame!.incoming, opacity: v2TransitionFrame!.incoming.opacity * 0.9 })} />
           ) : null}
           {cue ? <div className={`preview-caption caption-${branch.captionStyle.preset}`}><p>{cue.text}</p></div> : null}
-          <div className="safe-frame" aria-hidden="true"><i /><i /><i /><i /></div>
           <audio ref={audio} src={a1Clip ? asset(a1Clip.assetId)?.uri : undefined} />
           <audio ref={audio2} src={a2Clip ? asset(a2Clip.assetId)?.uri : undefined} />
         </div>

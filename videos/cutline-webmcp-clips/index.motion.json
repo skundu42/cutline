@@ -1,0 +1,18 @@
+{
+  "duration": 60,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#webmcp-overview .headline", "bySec": 0.9 },
+    { "kind": "appearsBy", "selector": "#inspect-first .headline", "bySec": 10.9 },
+    { "kind": "appearsBy", "selector": "#reversible-branch .headline", "bySec": 20.9 },
+    { "kind": "appearsBy", "selector": "#semantic-edit .headline", "bySec": 30.9 },
+    { "kind": "appearsBy", "selector": "#protected-ranges .headline", "bySec": 40.9 },
+    { "kind": "appearsBy", "selector": "#visible-proof .headline", "bySec": 50.9 },
+    { "kind": "staysInFrame", "selector": "#webmcp-overview .scene-shell" },
+    { "kind": "staysInFrame", "selector": "#inspect-first .scene-shell" },
+    { "kind": "staysInFrame", "selector": "#reversible-branch .scene-shell" },
+    { "kind": "staysInFrame", "selector": "#semantic-edit .scene-shell" },
+    { "kind": "staysInFrame", "selector": "#protected-ranges .scene-shell" },
+    { "kind": "staysInFrame", "selector": "#visible-proof .scene-shell" },
+    { "kind": "keepsMoving", "withinSelector": "#stage", "maxStaticSec": 3 }
+  ]
+}

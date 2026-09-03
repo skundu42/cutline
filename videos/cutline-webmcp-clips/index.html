@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1280, height=720" />
+    <title>Cutline WebMCP Clips</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&display=block" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      :root {
+        --forest: #102923;
+        --forest-light: #17372f;
+        --lime: #bff56c;
+        --orange: #ff7f52;
+        --paper: #fafbf9;
+        --ink: #171b19;
+        --lavender: #dedbe8;
+        --muted: rgba(250, 251, 249, 0.68);
+        --line: rgba(250, 251, 249, 0.19);
+      }
+      *, *::before, *::after { box-sizing: border-box; }
+      html, body {
+        width: 1280px;
+        height: 720px;
+        margin: 0;
+        overflow: hidden;
+        background: var(--forest);
+      }
+      body { font-family: "Archivo", Arial, sans-serif; color: var(--paper); }
+      #stage {
+        position: relative;
+        width: 1280px;
+        height: 720px;
+        overflow: hidden;
+        background: var(--forest);
+      }
+      .field {
+        position: absolute;
+        inset: 0;
+        background-color: var(--forest);
+        background-image:
+          radial-gradient(circle at 82% 18%, rgba(191, 245, 108, 0.12), transparent 30%),
+          linear-gradient(rgba(250, 251, 249, 0.045) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(250, 251, 249, 0.045) 1px, transparent 1px);
+        background-size: auto, 72px 72px, 72px 72px;
+      }
+      .clip {
+        position: absolute;
+        inset: 0;
+        width: 1280px;
+        height: 720px;
+        overflow: hidden;
+      }
+      .scene-shell {
+        display: grid;
+        grid-template-rows: 24px 144px 50px 290px 42px;
+        row-gap: 8px;
+        width: 100%;
+        height: 100%;
+        padding: 54px 72px;
+      }
+      .kicker {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: var(--lime);
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .kicker-index {
+        display: grid;
+        place-items: center;
+        width: 34px;
+        height: 22px;
+        border: 2px solid var(--lime);
+        border-radius: 11px;
+        color: var(--paper);
+        font-size: 13px;
+        letter-spacing: 0.04em;
+      }
+      .headline-wrap {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: flex-start;
+        min-width: 0;
+      }
+      .headline {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0 17px;
+        max-width: 1100px;
+        color: var(--paper);
+        font-size: 68px;
+        font-weight: 800;
+        letter-spacing: -0.055em;
+        line-height: 0.96;
+      }
+      .headline-word { display: inline-block; white-space: nowrap; }
+      .headline-word.emphasis { color: var(--lime); }
+      .headline-word.conflict { color: var(--orange); }
+      .accent-rule {
+        width: 220px;
+        height: 4px;
+        margin-top: 8px;
+        background: var(--lime);
+        transform-origin: left center;
+      }
+      .supporting {
+        display: flex;
+        align-items: flex-start;
+        max-width: 990px;
+        color: var(--muted);
+        font-size: 22px;
+        font-weight: 400;
+        line-height: 1.24;
+      }
+      .diagram { position: relative; width: 100%; height: 290px; overflow: hidden; }
+      .proof {
+        display: flex;
+        align-items: flex-end;
+        gap: 14px;
+        color: var(--paper);
+        font-size: 24px;
+        font-weight: 600;
+        line-height: 1.1;
+      }
+      .proof-mark {
+        flex: 0 0 auto;
+        width: 11px;
+        height: 11px;
+        margin-bottom: 5px;
+        border-radius: 50%;
+        background: var(--lime);
+      }
+      .node, .token, .receipt, .verify-column {
+        border: 2px solid var(--line);
+        border-radius: 14px;
+        background: rgba(23, 55, 47, 0.92);
+      }
+      .node {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--paper);
+        font-size: 22px;
+        font-weight: 700;
+      }
+      .node.primary { border-color: var(--lime); background: var(--lime); color: var(--ink); }
+      .token {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 8px 14px;
+        color: var(--paper);
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        white-space: nowrap;
+      }
+      .token.orange { border-color: var(--orange); color: var(--orange); }
+      .label {
+        color: var(--muted);
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .mono { font-family: ui-monospace, monospace; font-size: 16px; }
+      .timeline-track {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        height: 66px;
+        padding: 8px;
+        border: 2px solid var(--line);
+        background: rgba(23, 55, 47, 0.78);
+      }
+      .track-block { height: 46px; border-radius: 7px; background: var(--lavender); color: var(--ink); }
+      .track-block.lime { background: var(--lime); }
+
+      .overview-diagram {
+        display: grid;
+        grid-template-columns: 240px 1fr 310px;
+        align-items: center;
+        gap: 34px;
+        padding: 20px 0 24px;
+      }
+      .overview-node { height: 126px; font-size: 28px; }
+      .tool-paths { display: grid; gap: 24px; }
+      .tool-path { position: relative; display: flex; align-items: center; height: 30px; }
+      .tool-path::before { content: ""; position: absolute; left: 0; right: 0; height: 3px; background: var(--lime); }
+      .tool-path::after {
+        content: "";
+        position: absolute;
+        right: -2px;
+        width: 12px;
+        height: 12px;
+        border-top: 3px solid var(--lime);
+        border-right: 3px solid var(--lime);
+        transform: rotate(45deg);
+      }
+      .tool-path .mono { position: relative; z-index: 1; margin-left: 18px; padding: 5px 10px; background: var(--forest); color: var(--paper); }
+      .mini-timeline {
+        display: grid;
+        grid-template-rows: auto repeat(3, 46px);
+        gap: 8px;
+        min-height: 212px;
+        padding: 18px;
+        border: 2px solid var(--line);
+        background: rgba(23, 55, 47, 0.8);
+      }
+      .mini-track { display: grid; grid-template-columns: 30px 1fr 0.65fr; align-items: center; gap: 5px; }
+      .mini-track .label { color: var(--paper); font-size: 13px; }
+      .mini-segment { height: 30px; border-radius: 5px; background: var(--lavender); }
+      .mini-segment.accent { background: var(--lime); }
+
+      .inspect-diagram { display: grid; grid-template-columns: 260px 1fr; gap: 38px; padding: 10px 0; }
+      .inspect-rail {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        height: 270px;
+        padding: 24px;
+        border-left: 7px solid var(--lime);
+        background: rgba(23, 55, 47, 0.72);
+      }
+      .inspect-rail .mono { color: var(--lime); font-size: 19px; font-weight: 700; }
+      .inspect-arrow { display: flex; align-items: center; gap: 12px; color: var(--paper); font-size: 18px; font-weight: 600; }
+      .inspect-arrow-line { flex: 1; height: 3px; background: var(--lime); transform-origin: left center; }
+      .state-stack { position: relative; display: grid; grid-template-rows: repeat(5, 46px); gap: 8px; }
+      .state-row {
+        display: grid;
+        grid-template-columns: 180px 1fr 90px;
+        align-items: center;
+        padding: 0 18px;
+        border: 2px solid var(--line);
+        background: rgba(23, 55, 47, 0.82);
+      }
+      .state-row-value { color: var(--lime); font-size: 20px; font-weight: 700; text-align: right; }
+      .scan-line { position: absolute; top: 0; left: 0; width: 7px; height: 262px; background: var(--lime); box-shadow: 0 0 22px rgba(191, 245, 108, 0.55); }
+
+      .branch-diagram { display: grid; grid-template-rows: 214px 58px; gap: 12px; padding-top: 4px; }
+      .branch-canvas { position: relative; }
+      .branch-svg { position: absolute; inset: 0; width: 100%; height: 214px; overflow: visible; }
+      .branch-path, .source-path { fill: none; stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; }
+      .source-path { stroke: var(--lavender); }
+      .branch-path { stroke: var(--lime); }
+      .branch-label { position: absolute; color: var(--paper); font-size: 18px; font-weight: 700; }
+      .branch-main-label { left: 12px; top: 178px; }
+      .branch-agent-label { left: 640px; top: 28px; color: var(--lime); }
+      .version-token { position: absolute; left: 412px; top: 87px; }
+      .version-badge {
+        position: absolute;
+        right: 14px;
+        top: 36px;
+        display: grid;
+        place-items: center;
+        width: 86px;
+        height: 86px;
+        border-radius: 50%;
+        background: var(--lime);
+        color: var(--ink);
+        font-size: 30px;
+        font-weight: 800;
+      }
+      .branch-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+      .branch-action {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-bottom: 4px solid var(--line);
+        color: var(--muted);
+        font-size: 18px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      .semantic-diagram { display: grid; grid-template-rows: 58px 76px 48px 52px; gap: 8px; padding-top: 6px; }
+      .command-labels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px; align-items: end; }
+      .command-label {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 40px;
+        border-bottom: 3px solid var(--lime);
+        color: var(--paper);
+        font-size: 17px;
+        font-weight: 600;
+      }
+      .semantic-track { display: grid; grid-template-columns: 1.1fr 0.72fr 1fr 0.86fr; gap: 5px; }
+      .semantic-track .track-block { display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700; }
+      .caption-lane { display: grid; grid-template-columns: 0.8fr 1.4fr 0.72fr 1fr; gap: 8px; padding: 9px; border: 2px solid var(--line); }
+      .caption-chip { height: 25px; border-radius: 4px; background: rgba(191, 245, 108, 0.35); }
+      .batch-rail {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 18px;
+        border: 2px solid var(--lime);
+        background: rgba(191, 245, 108, 0.08);
+      }
+      .batch-rail strong { color: var(--lime); font-size: 18px; }
+      .batch-receipt { color: var(--paper); font-size: 16px; }
+
+      .protected-diagram { display: grid; grid-template-rows: 54px 78px 98px; gap: 14px; padding-top: 16px; }
+      .collision-row { position: relative; display: grid; grid-template-columns: 290px 1fr 330px; align-items: center; gap: 20px; }
+      .incoming-command { position: relative; z-index: 2; justify-self: start; border-color: var(--orange); color: var(--orange); }
+      .collision-arrow { height: 5px; background: var(--orange); transform-origin: left center; }
+      .collision-stop { position: absolute; left: 591px; width: 12px; height: 52px; border-radius: 6px; background: var(--orange); }
+      .locked-receipt { display: flex; flex-direction: column; justify-content: center; height: 78px; padding: 0 20px; border-color: var(--orange); }
+      .locked-receipt strong { color: var(--orange); font-size: 19px; }
+      .locked-receipt span { margin-top: 4px; color: var(--muted); font-size: 14px; }
+      .locked-track { position: relative; }
+      .locked-band {
+        position: absolute;
+        top: 8px;
+        bottom: 8px;
+        left: 39%;
+        width: 29%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 7px;
+        background: var(--orange);
+        color: var(--ink);
+        font-size: 16px;
+        font-weight: 800;
+        letter-spacing: 0.09em;
+      }
+      .state-compare { display: grid; grid-template-columns: 98px 1fr; grid-template-rows: repeat(2, 40px); align-items: center; gap: 8px 14px; }
+      .compare-line { display: grid; grid-template-columns: 1fr 0.72fr 1.15fr 0.8fr; gap: 4px; }
+      .compare-line span { height: 15px; border-radius: 4px; background: var(--lavender); }
+      .compare-line span:nth-child(2) { background: var(--lime); }
+
+      .proof-diagram { display: grid; grid-template-rows: 178px 58px; gap: 18px; padding-top: 18px; }
+      .verify-grid { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: 36px; }
+      .verify-column { position: relative; z-index: 2; display: flex; flex-direction: column; justify-content: space-between; padding: 24px; background: var(--forest-light); }
+      .verify-column strong { color: var(--paper); font-size: 24px; text-transform: uppercase; }
+      .verify-column .digest { color: var(--lime); font-size: 23px; font-weight: 700; }
+      .verify-line { position: absolute; z-index: 1; top: 88px; left: 48px; right: 48px; height: 5px; background: var(--lime); transform-origin: left center; }
+      .verified-row { display: grid; grid-template-columns: 1fr 240px; gap: 18px; width: 760px; margin: 0 auto; }
+      .verified-bar, .export-mark { display: flex; align-items: center; justify-content: center; height: 58px; border-radius: 12px; font-weight: 800; }
+      .verified-bar { background: var(--lime); color: var(--ink); font-size: 22px; letter-spacing: 0.08em; }
+      .export-mark { border: 2px solid var(--lime); color: var(--paper); font-size: 18px; }
+    </style>
+  </head>
+  <body>
+    <div id="stage" data-composition-id="cutline-webmcp-clips" data-start="0" data-duration="60" data-fps="30" data-width="1280" data-height="720">
+      <div class="field" aria-hidden="true"></div>
+
+      <section id="webmcp-overview" class="clip" data-start="0" data-duration="10" data-track-index="1">
+        <div class="scene-shell foreground">
+          <div class="kicker"><span class="kicker-index">01</span> Shared workspace</div>
+          <div class="headline-wrap"><div class="headline"><span class="headline-word emphasis">WebMCP</span><span class="headline-word">makes</span><span class="headline-word">the</span><span class="headline-word">page</span><span class="headline-word emphasis">agent-native.</span></div><div class="accent-rule"></div></div>
+          <div class="supporting">A site exposes meaningful tools, not brittle coordinates or hidden automation.</div>
+          <div class="diagram overview-diagram">
+            <div class="node primary overview-node diagram-enter">WebMCP</div>
+            <div class="tool-paths"><div class="tool-path diagram-enter"><span class="mono">inspect_project</span></div><div class="tool-path diagram-enter"><span class="mono">apply_edit_batch</span></div><div class="tool-path diagram-enter"><span class="mono">preview_range</span></div></div>
+            <div class="mini-timeline diagram-enter"><div class="label">Shared timeline</div><div class="mini-track"><span class="label">V1</span><span class="mini-segment accent"></span><span class="mini-segment"></span></div><div class="mini-track"><span class="label">V2</span><span class="mini-segment"></span><span class="mini-segment accent"></span></div><div class="mini-track"><span class="label">A1</span><span class="mini-segment accent"></span><span class="mini-segment"></span></div></div>
+          </div>
+          <div class="proof"><span class="proof-mark"></span>The agent understands the same workspace as the person.</div>
+        </div>
+      </section>
+
+      <section id="inspect-first" class="clip" data-start="10" data-duration="10" data-track-index="1">
+        <div class="scene-shell foreground">
+          <div class="kicker"><span class="kicker-index">02</span> Bounded context</div>
+          <div class="headline-wrap"><div class="headline"><span class="headline-word emphasis">Inspect</span><span class="headline-word">first.</span><span class="headline-word">Edit</span><span class="headline-word">with</span><span class="headline-word emphasis">context.</span></div><div class="accent-rule"></div></div>
+          <div class="supporting">Assets, tracks, locks, comments, and branch versions arrive as bounded structured state.</div>
+          <div class="diagram inspect-diagram">
+            <div class="inspect-rail diagram-enter"><div class="mono">inspect_project</div><div class="inspect-arrow"><span>READ</span><span class="inspect-arrow-line"></span><span>STATE</span></div></div>
+            <div class="state-stack"><div class="state-row diagram-enter"><span class="label">Assets</span><span class="mono">media[]</span><span class="state-row-value">06</span></div><div class="state-row diagram-enter"><span class="label">Tracks</span><span class="mono">v1 · v2 · a1 · a2 · cc</span><span class="state-row-value">05</span></div><div class="state-row diagram-enter"><span class="label">Locks</span><span class="mono">protectedRanges[]</span><span class="state-row-value">02</span></div><div class="state-row diagram-enter"><span class="label">Comments</span><span class="mono">reviewNotes[]</span><span class="state-row-value">03</span></div><div class="state-row diagram-enter"><span class="label">Branch</span><span class="mono">branch_main</span><span class="state-row-value">v12</span></div><div class="scan-line"></div></div>
+          </div>
+          <div class="proof"><span class="proof-mark"></span>Plan from real project state, not screen guesses.</div>
+        </div>
+      </section>
+
+      <section id="reversible-branch" class="clip" data-start="20" data-duration="10" data-track-index="1">
+        <div class="scene-shell foreground">
+          <div class="kicker"><span class="kicker-index">03</span> Safe iteration</div>
+          <div class="headline-wrap"><div class="headline"><span class="headline-word">Every</span><span class="headline-word">agent</span><span class="headline-word">idea</span><span class="headline-word">gets</span><span class="headline-word">a</span><span class="headline-word emphasis">reversible</span><span class="headline-word emphasis">branch.</span></div><div class="accent-rule"></div></div>
+          <div class="supporting">Version checks prevent stale writes. Undo, redo, compare, and acceptance remain explicit.</div>
+          <div class="diagram branch-diagram">
+            <div class="branch-canvas diagram-enter"><svg class="branch-svg" viewBox="0 0 1136 214" aria-hidden="true"><path class="source-path" d="M 18 166 H 1118" /><path class="branch-path" d="M 394 166 C 470 166 474 63 560 63 H 1118" /></svg><div class="branch-label branch-main-label">SOURCE · branch_main · v12</div><div class="branch-label branch-agent-label">AGENT BRANCH</div><div class="token orange version-token mono">expectedVersion: 12</div><div class="version-badge">v13</div></div>
+            <div class="branch-actions"><div class="branch-action diagram-enter">Undo</div><div class="branch-action diagram-enter">Redo</div><div class="branch-action diagram-enter">Compare</div><div class="branch-action diagram-enter">Accept</div></div>
+          </div>
+          <div class="proof"><span class="proof-mark"></span>Move fast without overwriting the accepted cut.</div>
+        </div>
+      </section>
+
+      <section id="semantic-edit" class="clip" data-start="30" data-duration="10" data-track-index="1">
+        <div class="scene-shell foreground">
+          <div class="kicker"><span class="kicker-index">04</span> Semantic editing</div>
+          <div class="headline-wrap"><div class="headline"><span class="headline-word">Agents</span><span class="headline-word">edit</span><span class="headline-word emphasis">intent,</span><span class="headline-word conflict">not</span><span class="headline-word conflict">pixels.</span></div><div class="accent-rule"></div></div>
+          <div class="supporting">Split, trim, place B-roll, add transitions, and style captions through narrow tools.</div>
+          <div class="diagram semantic-diagram"><div class="command-labels"><div class="command-label diagram-enter mono">split_clip</div><div class="command-label diagram-enter mono">trim_clip</div><div class="command-label diagram-enter mono">place_broll</div><div class="command-label diagram-enter mono">add_transition</div></div><div class="timeline-track semantic-track diagram-enter"><div class="track-block lime">INTRO</div><div class="track-block">A-ROLL</div><div class="track-block lime">B-ROLL</div><div class="track-block">OUTRO</div></div><div class="caption-lane diagram-enter"><span class="caption-chip"></span><span class="caption-chip"></span><span class="caption-chip"></span><span class="caption-chip"></span></div><div class="batch-rail diagram-enter"><strong class="mono">apply_edit_batch</strong><span class="batch-receipt mono">4 ops · atomic · receipt ✓</span></div></div>
+          <div class="proof"><span class="proof-mark"></span>One validated command bus powers every edit surface.</div>
+        </div>
+      </section>
+
+      <section id="protected-ranges" class="clip" data-start="40" data-duration="10" data-track-index="1">
+        <div class="scene-shell foreground">
+          <div class="kicker"><span class="kicker-index">05</span> Conflict safety</div>
+          <div class="headline-wrap"><div class="headline"><span class="headline-word conflict">Protected</span><span class="headline-word">means</span><span class="headline-word conflict">protected.</span></div><div class="accent-rule"></div></div>
+          <div class="supporting">Versioned locks block intersecting edits and return a structured explanation to every actor.</div>
+          <div class="diagram protected-diagram"><div class="collision-row"><div class="token orange incoming-command diagram-enter mono">ripple_delete</div><div class="collision-arrow diagram-enter"></div><div class="collision-stop diagram-enter"></div><div class="receipt locked-receipt"><strong class="mono">LOCKED_RANGE</strong><span>range intersects protected material</span></div></div><div class="timeline-track locked-track diagram-enter"><div class="track-block" style="width: 34%"></div><div class="track-block lime" style="width: 27%"></div><div class="track-block" style="width: 39%"></div><div class="locked-band">PROTECTED</div></div><div class="state-compare diagram-enter"><span class="label">Before</span><div class="compare-line"><span></span><span></span><span></span><span></span></div><span class="label">After</span><div class="compare-line"><span></span><span></span><span></span><span></span></div></div></div>
+          <div class="proof"><span class="proof-mark"></span>The state stays unchanged and the reason stays visible.</div>
+        </div>
+      </section>
+
+      <section id="visible-proof" class="clip" data-start="50" data-duration="10" data-track-index="1">
+        <div class="scene-shell foreground">
+          <div class="kicker"><span class="kicker-index">06</span> Visible proof</div>
+          <div class="headline-wrap"><div class="headline"><span class="headline-word emphasis">Same</span><span class="headline-word">state.</span><span class="headline-word emphasis">Same</span><span class="headline-word">preview.</span><span class="headline-word emphasis">Verifiable</span><span class="headline-word">result.</span></div><div class="accent-rule"></div></div>
+          <div class="supporting">Compare branches, inspect receipts, preview exact ranges, then export the verified cut locally.</div>
+          <div class="diagram proof-diagram"><div class="verify-grid"><div class="verify-column diagram-enter"><strong>State</strong><span class="digest mono">7B4E…91C2</span><span class="label">branch digest</span></div><div class="verify-column diagram-enter"><strong>Preview</strong><span class="digest mono">7B4E…91C2</span><span class="label">exact range</span></div><div class="verify-column diagram-enter"><strong>Receipt</strong><span class="digest mono">7B4E…91C2</span><span class="label">verified write</span></div><div class="verify-line"></div></div><div class="verified-row"><div class="verified-bar diagram-enter">VERSION VERIFIED</div><div class="export-mark diagram-enter">LOCAL EXPORT ↑</div></div></div>
+          <div class="proof"><span class="proof-mark"></span>Cutline makes every WebMCP edit visible and reversible.</div>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      (function () {
+        const tl = gsap.timeline({ paused: true });
+        const scenes = [
+          { id: "webmcp-overview", start: 0, proof: 7.4 },
+          { id: "inspect-first", start: 10, proof: 7.2 },
+          { id: "reversible-branch", start: 20, proof: 7.1 },
+          { id: "semantic-edit", start: 30, proof: 7.0 },
+          { id: "protected-ranges", start: 40, proof: 7.2 },
+          { id: "visible-proof", start: 50, proof: 7.1 },
+        ];
+
+        scenes.forEach(function (scene) {
+          const root = "#" + scene.id;
+          tl.fromTo(root + " .scene-shell", { autoAlpha: 0, y: 0 }, { autoAlpha: 1, y: 0, duration: 0.12, ease: "none" }, scene.start);
+          tl.fromTo(root + " .headline-word", { autoAlpha: 0, y: 34 }, { autoAlpha: 1, y: 0, duration: 0.52, stagger: 0.06, ease: "power3.out" }, scene.start + 0.35);
+          tl.fromTo(root + " .accent-rule", { scaleX: 0 }, { scaleX: 1, duration: 0.58, ease: "power3.out" }, scene.start + 0.78);
+          tl.fromTo(root + " .supporting", { autoAlpha: 0, x: -24 }, { autoAlpha: 1, x: 0, duration: 0.48, ease: "power2.out" }, scene.start + 0.82);
+          tl.fromTo(root + " .diagram-enter", { autoAlpha: 0, y: 28 }, { autoAlpha: 1, y: 0, duration: 0.48, stagger: 0.09, ease: "power3.out" }, scene.start + 1.2);
+          tl.fromTo(root + " .proof", { autoAlpha: 0, x: -24 }, { autoAlpha: 1, x: 0, duration: 0.52, ease: "power3.out" }, scene.start + scene.proof);
+          tl.fromTo(root + " .proof-mark", { scale: 0 }, { scale: 1, duration: 0.34, ease: "back.out(1.8)" }, scene.start + scene.proof + 0.12);
+          tl.to(root + " .scene-shell", { autoAlpha: 0, duration: 0.35, ease: "power2.in" }, scene.start + 9.65);
+        });
+
+        tl.fromTo("#webmcp-overview .tool-path", { scaleX: 0, transformOrigin: "left center" }, { scaleX: 1, duration: 0.7, stagger: 0.12, ease: "power3.out" }, 1.85);
+        tl.to("#webmcp-overview .overview-node", { scale: 1.08, duration: 0.22, repeat: 1, yoyo: true, ease: "sine.inOut" }, 4.4);
+        tl.to("#webmcp-overview .mini-segment.accent", { backgroundColor: "#ff7f52", duration: 0.3, stagger: 0.12, ease: "power2.out" }, 4.5);
+        tl.to("#webmcp-overview .mini-segment.accent", { backgroundColor: "#bff56c", duration: 0.3, stagger: 0.12, ease: "power2.out" }, 5.2);
+
+        tl.fromTo("#inspect-first .scan-line", { x: 0, autoAlpha: 0 }, { x: 760, autoAlpha: 1, duration: 1.8, ease: "power2.inOut" }, 14.2);
+        tl.to("#inspect-first .state-row-value", { scale: 1.14, duration: 0.18, repeat: 1, yoyo: true, stagger: 0.13, ease: "sine.inOut" }, 14.4);
+        tl.to("#inspect-first .scan-line", { autoAlpha: 0, duration: 0.2 }, 16.05);
+
+        tl.fromTo("#reversible-branch .branch-path", { strokeDasharray: 920, strokeDashoffset: 920 }, { strokeDashoffset: 0, duration: 1.15, ease: "power3.out" }, 21.7);
+        tl.fromTo("#reversible-branch .version-badge", { scale: 0, autoAlpha: 0 }, { scale: 1, autoAlpha: 1, duration: 0.52, ease: "back.out(1.8)" }, 24.1);
+        tl.to("#reversible-branch .branch-action", { color: "#bff56c", borderColor: "#bff56c", duration: 0.2, stagger: 0.34, ease: "power2.out" }, 24.5);
+        tl.to("#reversible-branch .branch-path", { y: 15, duration: 0.55, ease: "power2.inOut" }, 27.1);
+
+        tl.to("#semantic-edit .headline-word.conflict", { scale: 0.82, autoAlpha: 0.38, duration: 0.42, ease: "power3.in" }, 34.0);
+        tl.to("#semantic-edit .semantic-track .track-block", { scaleX: 0.9, transformOrigin: "right center", duration: 0.32, stagger: 0.12, ease: "power2.inOut" }, 34.25);
+        tl.to("#semantic-edit .semantic-track .track-block", { scaleX: 1, duration: 0.34, stagger: 0.12, ease: "power2.out" }, 35.0);
+        tl.to("#semantic-edit .batch-rail", { scale: 1.025, duration: 0.22, repeat: 1, yoyo: true, ease: "sine.inOut" }, 37.0);
+
+        tl.fromTo("#protected-ranges .collision-arrow", { scaleX: 0 }, { scaleX: 1, duration: 0.7, ease: "power3.out" }, 41.7);
+        tl.to("#protected-ranges .incoming-command", { x: 312, duration: 0.68, ease: "power3.in" }, 42.35);
+        tl.to("#protected-ranges .incoming-command", { x: 282, duration: 0.12, repeat: 3, yoyo: true, ease: "none" }, 43.03);
+        tl.to("#protected-ranges .incoming-command", { x: 0, duration: 0.55, ease: "power3.out" }, 44.2);
+        tl.fromTo("#protected-ranges .locked-receipt", { scale: 0.82, autoAlpha: 0 }, { scale: 1, autoAlpha: 1, duration: 0.44, ease: "back.out(1.7)" }, 44.3);
+        tl.to("#protected-ranges .locked-band", { scale: 1.04, duration: 0.24, repeat: 1, yoyo: true, ease: "sine.inOut" }, 47.2);
+
+        tl.fromTo("#visible-proof .verify-line", { scaleX: 0 }, { scaleX: 1, duration: 1.05, ease: "power3.out" }, 54.1);
+        tl.to("#visible-proof .digest", { color: "#fafbf9", duration: 0.22, stagger: 0.2, ease: "power2.out" }, 54.5);
+        tl.to("#visible-proof .digest", { color: "#bff56c", duration: 0.22, stagger: 0.2, ease: "power2.out" }, 55.2);
+        tl.fromTo("#visible-proof .verified-row", { scale: 0.94 }, { scale: 1, duration: 0.48, ease: "back.out(1.5)", immediateRender: false }, 57.1);
+        tl.to("#visible-proof .export-mark", { scale: 1.08, duration: 0.26, repeat: 1, yoyo: true, ease: "sine.inOut" }, 58.35);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["cutline-webmcp-clips"] = tl;
+        tl.seek(0);
+      })();
+    </script>
+  </body>
+</html>

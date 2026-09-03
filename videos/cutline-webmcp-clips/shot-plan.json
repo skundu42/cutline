@@ -1,0 +1,416 @@
+{
+  "status": "final",
+  "category": "kinetic-type",
+  "duration_s": 60,
+  "fps": 30,
+  "canvas": {
+    "w": 1280,
+    "h": 720,
+    "aspect": "16:9"
+  },
+  "style": "Full-bleed Cutline editorial motion system. Deep forest fills the entire canvas. Large Archivo typography and simple semantic diagrams use a shared 12-column grid with 72px outer margins, a 36px gutter, and consistent left edges. Content should occupy the frame confidently without a player mockup, inset viewport, rounded outer container, safe-area brackets, or ornamental border. Lime carries successful state, orange carries action or conflict, and pale surfaces appear only as flat diagram elements. Each ten-second segment must read as an independent clip with its own hook, proof, hold, and clean exit.",
+  "palette": [
+    "#102923",
+    "#17372F",
+    "#BFF56C",
+    "#FF7F52",
+    "#FAFBF9",
+    "#171B19",
+    "#DEDBE8"
+  ],
+  "font": "Archivo",
+  "beats": [
+    0.35,
+    1.2,
+    4.4,
+    7.4,
+    9.2,
+    10.35,
+    11.2,
+    14.2,
+    17.2,
+    19.2,
+    20.35,
+    21.2,
+    24.1,
+    27.1,
+    29.2,
+    30.35,
+    31.2,
+    34.0,
+    37.0,
+    39.2,
+    40.35,
+    41.2,
+    44.2,
+    47.2,
+    49.2,
+    50.35,
+    51.2,
+    54.1,
+    57.1,
+    59.2
+  ],
+  "export": "mp4",
+  "asset_needs": [],
+  "shot_brief": "The viewer experiences six crisp product proofs as one coherent Cutline motion package. Each clip opens with a large capability statement aligned to the same grid, then the words reorganize into a full-scale semantic diagram that demonstrates the claim before resolving to a short proof line. The dominant motion idea is state transformation: labels, tracks, branches, locks, and receipts change position or status in place, making WebMCP behavior visible without simulating a browser window. All graphics use the full 16:9 field while maintaining consistent margins and strong alignment.",
+  "content": {
+    "block": "caption-editorial-emphasis",
+    "customize": {
+      "words": "Use each scene's text and supporting_text",
+      "emphasis_words": "Use each scene's emphasis_words in lime, except conflict terms in orange",
+      "palette": [
+        "#102923",
+        "#17372F",
+        "#BFF56C",
+        "#FF7F52",
+        "#FAFBF9",
+        "#171B19",
+        "#DEDBE8"
+      ],
+      "font": "Archivo",
+      "canvas_adaptation": "Reflow the source block to 1280x720. Remove any container background, player chrome, outer radius, vignette, border, or safe-area decoration.",
+      "title_treatment": "Left aligned, 64px to 76px, maximum two lines, line-height 0.96, maximum width 880px",
+      "timing": "Hook visible by 0.5s local time; diagram begins by 1.2s; proof holds for at least 1.2s; all foreground elements exit by 9.85s local time"
+    },
+    "layout_system": {
+      "columns": 12,
+      "outer_margin_px": 72,
+      "gutter_px": 36,
+      "content_bounds": {
+        "left": 72,
+        "top": 54,
+        "right": 1208,
+        "bottom": 666
+      },
+      "shared_anchors": {
+        "kicker_top": 54,
+        "headline_top": 92,
+        "diagram_top": 270,
+        "proof_baseline": 646
+      },
+      "type_scale_px": {
+        "kicker": 16,
+        "headline_min": 64,
+        "headline_max": 76,
+        "supporting": 25,
+        "diagram_label": 18,
+        "proof": 24,
+        "code": 17
+      },
+      "rules": [
+        "Deep forest is the full canvas background, never an inset panel.",
+        "Headlines, diagrams, and proof lines share the same 72px left edge unless a scene explicitly spans columns.",
+        "No essential element may cross the content bounds.",
+        "Rounded rectangles may represent semantic nodes only; they may not wrap the full composition.",
+        "Use at least eight columns for the active diagram so the composition fills the 16:9 frame.",
+        "Keep one dominant diagram and no more than six simultaneous labels."
+      ]
+    },
+    "animation_rules": {
+      "runtime": "GSAP paused timelines registered with HyperFrames",
+      "seek_safety": "Use explicit fromTo states for every entrance and reset each ten-second segment independently. Animate transform, opacity, and clip geometry only.",
+      "dominant_motif": "state transformation",
+      "shared_entry": "word_reveal with 0.06s stagger, followed by underline_sweep on the emphasized phrase",
+      "shared_exit": "fade_out plus 18px slide_out over the final 0.35s, leaving only the full-bleed background at the cut",
+      "pattern_interrupt": "At 3.0s to 4.5s local time, change exactly one state in the diagram rather than adding decoration",
+      "legibility": "Hold every key label fully readable for at least 0.6s and every final proof line for at least 1.2s"
+    },
+    "scenes": [
+      {
+        "id": "webmcp-overview",
+        "start": 0,
+        "end": 10,
+        "output": "01-webmcp-overview.mp4",
+        "text": "WebMCP makes the page agent-native.",
+        "supporting_text": "A site exposes meaningful tools, not brittle coordinates or hidden automation.",
+        "proof_text": "The agent understands the same workspace as the person.",
+        "emphasis_words": [
+          "WebMCP",
+          "agent-native"
+        ],
+        "emotion": "confident introduction",
+        "phase_sequence": [
+          "Hook",
+          "Build",
+          "Punch",
+          "Resolve"
+        ],
+        "blocks": [
+          "caption-editorial-emphasis",
+          "flowchart"
+        ],
+        "layout": "Headline spans columns 1 through 9 at the shared top anchor. The WebMCP node occupies columns 1 through 3 and the simplified timeline occupies columns 8 through 12, with three horizontal tool paths crossing the center. Proof line spans columns 1 through 8 at the shared lower baseline.",
+        "motion_primitives": [
+          "word_reveal",
+          "underline_sweep",
+          "slide_right",
+          "scale_pulse",
+          "color_shift",
+          "fade_out"
+        ],
+        "pacing": {
+          "hook_local_s": [0, 1.2],
+          "build_local_s": [1.2, 4.4],
+          "punch_local_s": [4.4, 7.4],
+          "resolve_local_s": [7.4, 9.65],
+          "exit_local_s": [9.65, 10]
+        },
+        "exit": "Tool paths retract into the WebMCP node while headline and proof slide down 18px and fade. Full-bleed forest remains at 10.0s.",
+        "motion": "Hook with the headline occupying the upper-left two thirds. On the build beat, the word WebMCP becomes a bright central command node and sends three aligned signals labeled inspect_project, apply_edit_batch, and preview_range toward a simplified timeline on the right. The diagram expands across the available width, then resolves to the proof line along the shared lower baseline. Keep all elements flat on the full-bleed background.",
+        "beats": [
+          0.35,
+          1.2,
+          4.4,
+          7.4,
+          9.2
+        ]
+      },
+      {
+        "id": "inspect-first",
+        "start": 10,
+        "end": 20,
+        "output": "02-inspect-first.mp4",
+        "text": "Inspect first. Edit with context.",
+        "supporting_text": "Assets, tracks, locks, comments, and branch versions arrive as bounded structured state.",
+        "proof_text": "Plan from real project state, not screen guesses.",
+        "emphasis_words": [
+          "Inspect",
+          "context"
+        ],
+        "emotion": "precise and informed",
+        "phase_sequence": [
+          "Hook",
+          "Build",
+          "Punch",
+          "Resolve"
+        ],
+        "blocks": [
+          "caption-editorial-emphasis",
+          "flowchart"
+        ],
+        "layout": "Headline spans columns 1 through 9. A vertical inspect_project rail occupies columns 1 through 3 from y=286 to y=556. Five structured-state rows fill columns 4 through 12 on a common baseline grid, each 52px tall with 14px gaps. Proof line stays on columns 4 through 12 at the lower baseline.",
+        "motion_primitives": [
+          "slide_left",
+          "word_reveal",
+          "bar_wipe",
+          "color_shift",
+          "hold_breath",
+          "fade_out"
+        ],
+        "pacing": {
+          "hook_local_s": [0, 1.2],
+          "build_local_s": [1.2, 4.2],
+          "punch_local_s": [4.2, 7.2],
+          "resolve_local_s": [7.2, 9.65],
+          "exit_local_s": [9.65, 10]
+        },
+        "exit": "The five rows collapse into one aligned state summary, then all foreground content fades without moving the background.",
+        "motion": "The headline snaps to the common title line. A wide structured-state stack grows from five horizontal rows that fill the center and lower frame: assets, tracks, locks, comments, and branch version. A single inspect_project token sweeps left to right and reveals each row in order. The rows converge into one clear planning cursor before the proof line settles at the bottom-left.",
+        "beats": [
+          10.35,
+          11.2,
+          14.2,
+          17.2,
+          19.2
+        ]
+      },
+      {
+        "id": "reversible-branch",
+        "start": 20,
+        "end": 30,
+        "output": "03-reversible-branch.mp4",
+        "text": "Every agent idea gets a reversible branch.",
+        "supporting_text": "Version checks prevent stale writes. Undo, redo, compare, and acceptance remain explicit.",
+        "proof_text": "Move fast without overwriting the accepted cut.",
+        "emphasis_words": [
+          "reversible",
+          "branch"
+        ],
+        "emotion": "safe momentum",
+        "phase_sequence": [
+          "Hook",
+          "Build",
+          "Punch",
+          "Resolve"
+        ],
+        "blocks": [
+          "caption-editorial-emphasis",
+          "flowchart"
+        ],
+        "layout": "Headline spans columns 1 through 10. A source branch line starts in column 1 at y=380 and runs to column 12. The agent branch forks upward across columns 5 through 11, keeping 80px separation from the source. Version token sits at the fork and four compact state labels align beneath the branch. Proof line returns to column 1 at the shared lower baseline.",
+        "motion_primitives": [
+          "word_reveal",
+          "underline_sweep",
+          "bar_wipe",
+          "scale_punch",
+          "scale_pulse",
+          "fade_out"
+        ],
+        "pacing": {
+          "hook_local_s": [0, 1.2],
+          "build_local_s": [1.2, 4.1],
+          "punch_local_s": [4.1, 7.1],
+          "resolve_local_s": [7.1, 9.65],
+          "exit_local_s": [9.65, 10]
+        },
+        "exit": "The agent branch eases back beside the unchanged source, then both lines and all type fade together to the forest field.",
+        "motion": "The headline enters as one continuous line across the upper grid. A main timeline runs full width through the middle, forks cleanly into an agent branch, and keeps the source line visible. expectedVersion 12 locks into the fork point, the branch advances to version 13, and compact undo, redo, compare, and accept states pulse in sequence. The branch then returns beside the source for a clear reversible comparison.",
+        "beats": [
+          20.35,
+          21.2,
+          24.1,
+          27.1,
+          29.2
+        ]
+      },
+      {
+        "id": "semantic-edit",
+        "start": 30,
+        "end": 40,
+        "output": "04-semantic-edit.mp4",
+        "text": "Agents edit intent, not pixels.",
+        "supporting_text": "Split, trim, place B-roll, add transitions, and style captions through narrow tools.",
+        "proof_text": "One validated command bus powers every edit surface.",
+        "emphasis_words": [
+          "intent",
+          "not pixels"
+        ],
+        "emotion": "direct and capable",
+        "phase_sequence": [
+          "Hook",
+          "Build",
+          "Punch",
+          "Resolve"
+        ],
+        "blocks": [
+          "caption-weight-shift",
+          "flowchart"
+        ],
+        "layout": "Headline spans columns 1 through 9 with intent in lime and not pixels compressed to the right. A V1 timeline fills columns 1 through 12 from y=330 to y=442; the caption lane sits directly below. Four command labels align above their exact edit points. The apply_edit_batch rail and proof line share the lower grid.",
+        "motion_primitives": [
+          "word_reveal",
+          "color_shift",
+          "scale_pulse",
+          "bar_wipe",
+          "scale_punch",
+          "fade_out"
+        ],
+        "pacing": {
+          "hook_local_s": [0, 1.2],
+          "build_local_s": [1.2, 4.0],
+          "punch_local_s": [4.0, 7.0],
+          "resolve_local_s": [7.0, 9.65],
+          "exit_local_s": [9.65, 10]
+        },
+        "exit": "The four edit labels merge into the command rail; timeline, caption lane, and type slide 18px left and fade before the cut.",
+        "motion": "The phrase not pixels breaks into a coarse coordinate grid and clears away while intent remains sharply aligned. A full-width V1 timeline and caption lane then perform four visible semantic operations in place: split, trim, place B-roll, and add transition. A single apply_edit_batch rail underlines the operations, gathers them into one receipt, and hands off to the proof line.",
+        "beats": [
+          30.35,
+          31.2,
+          34.0,
+          37.0,
+          39.2
+        ]
+      },
+      {
+        "id": "protected-ranges",
+        "start": 40,
+        "end": 50,
+        "output": "05-protected-ranges.mp4",
+        "text": "Protected means protected.",
+        "supporting_text": "Versioned locks block intersecting edits and return a structured explanation to every actor.",
+        "proof_text": "The state stays unchanged and the reason stays visible.",
+        "emphasis_words": [
+          "Protected",
+          "protected"
+        ],
+        "emotion": "firm and trustworthy",
+        "phase_sequence": [
+          "Hook",
+          "Build",
+          "Punch",
+          "Resolve"
+        ],
+        "blocks": [
+          "caption-kinetic-slam",
+          "flowchart"
+        ],
+        "layout": "Headline spans columns 1 through 8. One full-width timeline occupies columns 1 through 12 at y=356. The protected band covers columns 5 through 8 in orange, the incoming command uses columns 1 through 4, and the LOCKED_RANGE receipt opens across columns 8 through 12. Before and after state lines align beneath the timeline for direct comparison.",
+        "motion_primitives": [
+          "slam",
+          "shake",
+          "bar_wipe",
+          "scale_punch",
+          "color_shift",
+          "fade_out"
+        ],
+        "pacing": {
+          "hook_local_s": [0, 1.2],
+          "build_local_s": [1.2, 4.2],
+          "punch_local_s": [4.2, 7.2],
+          "resolve_local_s": [7.2, 9.65],
+          "exit_local_s": [9.65, 10]
+        },
+        "exit": "The command retracts, the lock band remains fixed for a final proof beat, then the foreground fades cleanly without changing the timeline state.",
+        "motion": "The repeated word protected lands as a wide orange range band across a full-width timeline. A ripple_delete command travels toward the band, compresses on contact, and rebounds without moving the underlying clips. LOCKED_RANGE expands from the collision point as a structured receipt, while a before and after state line remains perfectly registered to prove no mutation occurred.",
+        "beats": [
+          40.35,
+          41.2,
+          44.2,
+          47.2,
+          49.2
+        ]
+      },
+      {
+        "id": "visible-proof",
+        "start": 50,
+        "end": 60,
+        "output": "06-visible-proof.mp4",
+        "text": "Same state. Same preview. Verifiable result.",
+        "supporting_text": "Compare branches, inspect receipts, preview exact ranges, then export the verified cut locally.",
+        "proof_text": "Cutline makes every WebMCP edit visible and reversible.",
+        "emphasis_words": [
+          "Same",
+          "Verifiable"
+        ],
+        "emotion": "resolved and credible",
+        "phase_sequence": [
+          "Hook",
+          "Build",
+          "Punch",
+          "Resolve"
+        ],
+        "blocks": [
+          "caption-editorial-emphasis",
+          "flowchart"
+        ],
+        "layout": "Headline spans columns 1 through 11. Three equal verification columns fill columns 1 through 12 from y=300 to y=510 with 36px gutters. A lime verification line crosses their vertical centers. The verified result bar spans columns 3 through 10, and the proof line aligns to column 1 at the shared lower baseline.",
+        "motion_primitives": [
+          "word_reveal",
+          "slide_bottom",
+          "underline_sweep",
+          "glow",
+          "scale_punch",
+          "fade_out"
+        ],
+        "pacing": {
+          "hook_local_s": [0, 1.2],
+          "build_local_s": [1.2, 4.1],
+          "punch_local_s": [4.1, 7.1],
+          "resolve_local_s": [7.1, 9.65],
+          "exit_local_s": [9.65, 10]
+        },
+        "exit": "The three columns collapse into VERSION VERIFIED, the local export mark pulses once, and all foreground content fades to the full-bleed forest background.",
+        "motion": "Three large aligned columns labeled state, preview, and receipt fill the frame and reveal the same digest one after another. Their matching values draw a continuous lime verification line across the canvas. The columns collapse into a single verified result bar, which advances to a local export mark before the final proof line holds cleanly for the ending.",
+        "beats": [
+          50.35,
+          51.2,
+          54.1,
+          57.1,
+          59.2
+        ]
+      }
+    ]
+  }
+}
