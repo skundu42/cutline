@@ -1134,7 +1134,7 @@ export function WebMcpBridge() {
       const names = statusRegistered
         ? operationalRegistered ? [...P0_TOOL_NAMES] : ["project_status"]
         : [];
-      store().setRegisteredTools(getModelContext() ? names : [...names, "(no WebMCP host — tools still listed for the debug panel)"]);
+      store().setRegisteredTools(getModelContext() ? names : [...names, "(no WebMCP host; tools still listed for the debug panel)"]);
     };
     const reportFailure = (error: unknown) => {
       store().recordTool({

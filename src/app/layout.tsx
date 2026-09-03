@@ -18,7 +18,7 @@ const archivo = Archivo({
 });
 
 export const metadata: Metadata = {
-  title: "Cutline — agent-native video editor",
+  title: "Cutline | agent-native video editor",
   description: "A local-first browser video editor that people and Codex can control together.",
 };
 

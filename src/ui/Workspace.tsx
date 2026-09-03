@@ -349,7 +349,6 @@ export function Workspace() {
             </div>
           ) : null}
           {lastError?.startsWith("VALIDATION_ERROR") ? <div className="inline-error" role="alert">{lastError.replace("VALIDATION_ERROR: ", "")}</div> : null}
-          {editor.assets.length === 0 ? <div className="asset-empty"><span>Local media bin</span><p>Your files stay in this browser. Choose clips above, then add them to the sequence.</p></div> : null}
           <ul className="asset-list">
             {editor.assets.map((asset) => (
               <li key={asset.assetId} className="asset-card">
@@ -403,7 +402,7 @@ export function Workspace() {
                   >{silence ? <><span className="silence-wave">•••</span> silence</> : segment.text}</button>
                 );
               })}
-            </div> : <div className="transcript-empty"><strong>Attach timed captions</strong><span>Import an SRT or WebVTT file to unlock transcript selection, semantic edits, and caption styles—without uploading media.</span></div>}
+            </div> : <div className="transcript-empty"><strong>Attach timed captions</strong><span>Import an SRT or WebVTT file to unlock transcript selection, semantic edits, and caption styles without uploading media.</span></div>}
             {lastError?.startsWith("TRANSCRIPT") ? <div className="inline-error" role="alert">{lastError.replace("TRANSCRIPT: ", "")}</div> : null}
             </div>
           </section>

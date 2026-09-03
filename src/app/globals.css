@@ -169,8 +169,6 @@ button:disabled:hover { transform: none; box-shadow: none; }
 .upload-zone span { display: flex; flex-direction: column; }
 .upload-zone strong { font-size: 12px; font-weight: 650; }
 .upload-zone small { color: var(--muted); font-size: 10px; }
-.asset-empty { margin-bottom: 10px; padding: 13px 11px; border: 1px solid var(--line); border-radius: 9px; background: linear-gradient(145deg, var(--surface), var(--surface-2)); }
-.asset-empty span { color: var(--forest); font-family: var(--font-archivo), sans-serif; font-size: 10px; font-weight: 730; letter-spacing: .08em; text-transform: uppercase; }.asset-empty p { margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
 
 .asset-list { display: flex; margin: 0; padding: 0; flex-direction: column; gap: 7px; list-style: none; }
 .asset-card { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 9px; padding: 7px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); box-shadow: 0 1px white; transition: border-color .15s ease, box-shadow .15s ease; }

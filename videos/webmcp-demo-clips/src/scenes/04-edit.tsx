@@ -6,7 +6,7 @@ export default makeScene2D(function* (view) {
   const chrome = setupScene(view, {
     number: '04',
     kicker: 'Semantic editing',
-    title: 'Agents edit intent—not pixels.',
+    title: 'Agents edit intent, not pixels.',
     subtitle: 'Split, trim, place B-roll, add transitions, and style captions through narrow tools.',
     payoff: 'One validated command bus powers both direct manipulation and WebMCP actions.',
   });

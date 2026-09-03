@@ -7,7 +7,7 @@ export default makeScene2D(function* (view) {
     number: '01',
     kicker: 'The idea',
     title: 'WebMCP makes the page agent-native.',
-    subtitle: 'A site exposes meaningful tools—not brittle coordinates or hidden automation.',
+    subtitle: 'A site exposes meaningful tools, not brittle coordinates or hidden automation.',
     payoff: 'The agent understands the workspace in the same terms as the person using it.',
   });
   const browser = createRef<Rect>();
