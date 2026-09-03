@@ -150,7 +150,7 @@ test("attaches and collapses a local transcript", async ({ page }) => {
 
 test("an agent can plan, branch, edit, verify, compare, and accept a cut", async ({ page }) => {
   await openLocalFixture(page);
-  await expect(page.getByText("Agent connected")).toBeVisible();
+  await expect(page.getByText("WebMCP ready")).toBeVisible();
 
   const result = await page.evaluate(async () => {
     const tools = (window as typeof window & { __cutlineTools: Record<string, { execute: (input: unknown) => Promise<unknown> }> }).__cutlineTools;
@@ -218,27 +218,13 @@ test("keyboard and toolbar split linked picture and audio identically", async ({
   expect(await page.locator(".timeline-clip").evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label")))).toEqual(keyboard);
 });
 
-test("manually creates, compares, accepts, and continues a final version", async ({ page }) => {
+test("manually creates a version without a comparison control", async ({ page }) => {
   await openLocalFixture(page);
-  const original = (await inspectWorkspace(page)).branches[0];
   await page.locator(".version-menu > summary").click();
   await page.getByLabel("Version name").fill("Manual cut");
   await page.getByRole("button", { name: "Create version", exact: true }).click();
   await expect(page.getByTestId("branch-Manual cut")).toHaveAttribute("aria-current", "page");
-  await page.getByRole("button", { name: "Compare versions" }).click();
-  await page.locator(".compare-toggle").getByRole("button", { name: original.name, exact: true }).click();
-  expect((await inspectWorkspace(page)).project.activeBranchId).toBe(original.branchId);
-  await page.locator(".compare-toggle").getByRole("button", { name: "Manual cut", exact: true }).click();
-  await page.getByTestId("accept-branch").click();
-  await expect(page.getByText("Continue editing from final", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Exit comparison" }).click();
-  await page.locator(".version-menu > summary").click();
-  await page.getByLabel("Version name").fill("Follow up");
-  await page.getByRole("button", { name: "Create version", exact: true }).click();
-  await expect(page.getByTestId("branch-Follow up")).toHaveAttribute("aria-current", "page");
-  const inspected = await inspectWorkspace(page);
-  expect(inspected.branches.find((branch) => branch.name === "Manual cut")?.status).toBe("accepted");
-  expect(inspected.branches.find((branch) => branch.name === "Follow up")?.status).toBe("working");
+  await expect(page.getByRole("button", { name: "Compare versions" })).toHaveCount(0);
 });
 
 test("unprotects a selected lock and can undo the removal", async ({ page }) => {

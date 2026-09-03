@@ -45,7 +45,7 @@ Open [http://localhost:3000](http://localhost:3000). No environment variables, a
 ## Use with a WebMCP agent
 
 1. Open Cutline in a WebMCP-capable browser.
-2. Wait for the header status to show **Agent connected**.
+2. Wait for the header status to show **WebMCP ready**.
 3. Import local media.
 4. Ask the agent to inspect the project before editing.
 5. Review its branch, receipts, changed ranges, and preview before choosing a final cut.
@@ -161,7 +161,7 @@ npm run e2e
 
 ## Deployment
 
-Cutline is a standard Next.js application and includes `vercel.json` for automatic framework detection. It has no server-side media pipeline and requires no secrets. After deployment, verify the site in the WebMCP browser used by your agent and confirm that the connection status changes from **Agent offline** to **Agent connected**.
+Cutline is a standard Next.js application and includes `vercel.json` for automatic framework detection. It has no server-side media pipeline and requires no secrets. After deployment, verify the site in the WebMCP browser used by your agent and confirm that the connection status changes from **WebMCP unavailable** to **WebMCP ready**.
 
 ## Privacy and current limitations
 

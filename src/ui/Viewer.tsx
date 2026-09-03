@@ -1,7 +1,7 @@
 "use client";
 
 import { formatTimecode, getActiveClipTransition, getTransitionFrame } from "@/core";
-import type { ClipInstance } from "@/core/types";
+import type { Branch, ClipInstance } from "@/core/types";
 import { activeBranch, useEditorStore } from "@/store/editorStore";
 import { useEffect, useRef, type CSSProperties } from "react";
 import { SourceViewer } from "./SourceViewer";
@@ -48,28 +48,34 @@ export function Viewer() {
   const sourceId = useEditorStore((state) => state.sourceAssetId);
   const editor = useEditorStore((state) => state.editor);
   const setMode = useEditorStore((state) => state.setMonitorMode);
+  const compare = useEditorStore((state) => state.compare);
   const asset = editor.assets.find((item) => item.assetId === sourceId);
+  const comparedBranchId = compare.show === "right" ? compare.rightId : compare.leftId;
+  const branch = compare.enabled && comparedBranchId ? editor.branches[comparedBranchId] ?? activeBranch(editor) : activeBranch(editor);
   return <div className="monitor-shell">
-    <div className="monitor-tabs" role="tablist" aria-label="Monitor" onKeyDown={(event) => {
-      if (!asset || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-      event.preventDefault();
-      const next = event.key === "Home" ? "source" : event.key === "End" ? "timeline" : mode === "source" ? "timeline" : "source";
-      setMode(next);
-      event.currentTarget.querySelector<HTMLButtonElement>(`[data-monitor='${next}']`)?.focus();
-    }}>
-      <button type="button" role="tab" id="source-tab" data-monitor="source" aria-controls="source-panel" aria-selected={mode === "source"} tabIndex={mode === "source" ? 0 : -1} disabled={!asset} onClick={() => setMode("source")}>Source</button>
-      <button type="button" role="tab" id="timeline-tab" data-monitor="timeline" aria-controls="timeline-panel" aria-selected={mode === "timeline"} tabIndex={mode === "timeline" ? 0 : -1} onClick={() => setMode("timeline")}>Timeline</button>
+    <div className="monitor-header">
+      <div className="monitor-tabs" role="tablist" aria-label="Monitor" onKeyDown={(event) => {
+        if (!asset || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === "Home" ? "source" : event.key === "End" ? "timeline" : mode === "source" ? "timeline" : "source";
+        setMode(next);
+        event.currentTarget.querySelector<HTMLButtonElement>(`[data-monitor='${next}']`)?.focus();
+      }}>
+        <button type="button" role="tab" id="source-tab" data-monitor="source" aria-controls="source-panel" aria-selected={mode === "source"} tabIndex={mode === "source" ? 0 : -1} disabled={!asset} onClick={() => setMode("source")}>Source</button>
+        <button type="button" role="tab" id="timeline-tab" data-monitor="timeline" aria-controls="timeline-panel" aria-selected={mode === "timeline"} tabIndex={mode === "timeline" ? 0 : -1} onClick={() => setMode("timeline")}>Timeline</button>
+      </div>
+      {mode === "timeline" ? <div className="monitor-readout" aria-label="Program details"><i /><strong>Program</strong><span>{branch.name}</span><span>{branch.crop.aspectRatio} / {branch.crop.anchor.replace("_", " ")}</span></div> : null}
     </div>
     <div id="source-panel" role="tabpanel" aria-labelledby="source-tab" className="monitor-panel" hidden={mode !== "source"}>
       {asset ? <SourceViewer key={`${editor.project.projectId}:${asset.assetId}`} asset={asset} active={mode === "source"} /> : null}
     </div>
     <div id="timeline-panel" role="tabpanel" aria-labelledby="timeline-tab" className="monitor-panel" hidden={mode !== "timeline"}>
-      {mode === "timeline" ? <TimelineViewer /> : null}
+      {mode === "timeline" ? <TimelineViewer branch={branch} /> : null}
     </div>
   </div>;
 }
 
-function TimelineViewer() {
+function TimelineViewer({ branch }: { branch: Branch }) {
   const editor = useEditorStore((s) => s.editor);
   const playheadMs = useEditorStore((s) => s.playheadMs);
   const playing = useEditorStore((s) => s.playing);
@@ -79,9 +85,6 @@ function TimelineViewer() {
   const setPlaybackEndMs = useEditorStore((s) => s.setPlaybackEndMs);
   const importFiles = useEditorStore((s) => s.importFiles);
   const dispatch = useEditorStore((s) => s.dispatch);
-  const compare = useEditorStore((s) => s.compare);
-  const comparedBranchId = compare.show === "right" ? compare.rightId : compare.leftId;
-  const branch = compare.enabled && comparedBranchId ? editor.branches[comparedBranchId] ?? activeBranch(editor) : activeBranch(editor);
   const v1 = useRef<HTMLVideoElement>(null);
   const v1Incoming = useRef<HTMLVideoElement>(null);
   const v2 = useRef<HTMLVideoElement>(null);
@@ -184,11 +187,6 @@ function TimelineViewer() {
 
   return (
     <section className="viewer-shell" aria-label="Program monitor">
-      <div className="viewer-toolbar">
-        <div><span className="live-dot" /> Program</div>
-        <span>{branch.name}</span>
-        <span>{branch.crop.aspectRatio} · {branch.crop.anchor.replace("_", " ")}</span>
-      </div>
       <div className="viewer-stage">
         <div className={`program-frame ${aspect}`}>
           {v1Clip && v1Asset && !v1IsStill ? (

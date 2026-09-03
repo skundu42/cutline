@@ -107,7 +107,7 @@ export function Workspace() {
   const [activityCollapsed, setActivityCollapsed] = useState(false);
   const [activityTab, setActivityTab] = useState<ActivityTab>("comments");
   const [mobileView, setMobileView] = useState<MobileView>("preview");
-  const [assetPaneWidth, setAssetPaneWidth] = useState(250);
+  const [assetPaneWidth, setAssetPaneWidth] = useState(284);
   const [reviewPaneWidth, setReviewPaneWidth] = useState(320);
   const [timelineHeight, setTimelineHeight] = useState(198);
   const [splitShortcut, setSplitShortcut] = useState("s");
@@ -127,7 +127,7 @@ export function Workspace() {
       const availableSideWidth = Math.max(450, window.innerWidth - 420);
       const storedReviewWidth = Math.max(260, Math.min(520, read("cutline.layout.review", 320)));
       const reviewWidth = Math.min(storedReviewWidth, availableSideWidth - 190);
-      const mediaWidth = Math.max(190, Math.min(430, read("cutline.layout.media", 250), availableSideWidth - reviewWidth));
+      const mediaWidth = Math.max(190, Math.min(430, read("cutline.layout.media", 284), availableSideWidth - reviewWidth));
       setAssetPaneWidth(mediaWidth);
       setReviewPaneWidth(reviewWidth);
       setTimelineHeight(read("cutline.layout.timeline", 198));
@@ -293,11 +293,11 @@ export function Workspace() {
             </button>
           ))}
         </nav>
-        <VersionControls onCompare={() => { setActivityTab("history"); setActivityCollapsed(false); setMobileView("review"); }} />
+        <VersionControls />
         <div className="project-readout" aria-label="Current branch details"><span>{branch.crop.aspectRatio}</span><span>v{branch.branchVersion}</span><span>{formatTimecode(branch.durationMs)}</span></div>
         <div className="topbar-actions">
-          <div className={`connection-pill ${webMcpConnected ? "is-connected" : ""}`} title={webMcpConnected ? `${agentToolCount} editing actions are available` : "Open Cutline in a WebMCP-capable browser to connect an agent"}>
-            <span className="connection-dot" /><span className="connection-label">{webMcpConnected ? "Agent connected" : "Agent offline"}</span>
+          <div className={`connection-pill ${webMcpConnected ? "is-connected" : ""}`} title={webMcpConnected ? `${agentToolCount} editing actions are available` : "Open Cutline in a WebMCP-capable browser to expose agent tools"}>
+            <span className="connection-dot" /><span className="connection-label">{webMcpConnected ? "WebMCP ready" : "WebMCP unavailable"}</span>
           </div>
           <button className="icon-button" title={canUndo ? "Undo (⌘Z)" : "Nothing to undo"} aria-label="Undo" disabled={!canUndo} onClick={() => dispatch({ type: "Undo", actor: { type: "human", surface: "ui" }, payload: { branchId: branch.branchId } })}><Icon name="undo" /></button>
           <button className="icon-button" title={canRedo ? "Redo (⇧⌘Z)" : "Nothing to redo"} aria-label="Redo" disabled={!canRedo} onClick={() => dispatch({ type: "Redo", actor: { type: "human", surface: "ui" }, payload: { branchId: branch.branchId } })}><Icon name="redo" /></button>
@@ -498,7 +498,7 @@ function AgentGuideCard({ connected }: { connected: boolean }) {
   };
   return (
     <section className="prompt-card intent-strip">
-      <div className="prompt-heading"><Icon name="spark" /><span>Ask the agent</span><span className={`agent-ready-label ${connected ? "is-connected" : ""}`}>{connected ? "Connected" : "Offline"}</span></div>
+      <div className="prompt-heading"><Icon name="spark" /><span>Ask the agent</span><span className={`agent-ready-label ${connected ? "is-connected" : ""}`}>{connected ? "Tools ready" : "Unavailable"}</span></div>
       <p>Copy a timeline-aware request into Codex. It can create a safe branch, make bounded edits, and show exactly what changed.</p>
       <blockquote>“Turn this into a punchy short. Create a new branch, preserve protected ranges, and show me what changed.”</blockquote>
       <div className="prompt-actions">
@@ -509,10 +509,9 @@ function AgentGuideCard({ connected }: { connected: boolean }) {
   );
 }
 
-function VersionControls({ onCompare }: { onCompare: () => void }) {
+function VersionControls() {
   const editor = useEditorStore((state) => state.editor);
   const dispatch = useEditorStore((state) => state.dispatch);
-  const setCompare = useEditorStore((state) => state.setCompare);
   const menu = useRef<HTMLDetailsElement>(null);
   const branch = activeBranch(editor);
   const branches = Object.values(editor.branches);
@@ -534,12 +533,6 @@ function VersionControls({ onCompare }: { onCompare: () => void }) {
         <button type="submit" disabled={atLimit}>Create version</button>
       </form>
     </details>
-    <button className="secondary-button" type="button" disabled={branches.length < 2} onClick={() => {
-      const other = branches.find((item) => item.branchId === branch.baseBranchId) ?? branches.find((item) => item.branchId !== branch.branchId);
-      if (!other) return;
-      setCompare({ enabled: true, leftId: other.branchId, rightId: branch.branchId, show: "right" });
-      onCompare();
-    }}>Compare versions</button>
     {atLimit ? <span className="version-limit">8-version limit reached</span> : null}
   </div>;
 }
@@ -624,7 +617,7 @@ function ClipInspector() {
   const branch = activeBranch(editor);
   const clip = branch.tracks.flatMap((track) => track.items).find((item) => item.itemId === selectedItemId);
   const track = clip ? branch.tracks.find((entry) => entry.trackId === clip.trackId) : null;
-  if (!clip || !track) return <div className="inspector-empty"><Icon name="clip" /><p>Select a timeline clip to adjust audio, fades, or delete it.</p></div>;
+  if (!clip || !track) return null;
   const sortedTrackItems = [...track.items].sort((left, right) => left.startMs - right.startMs || left.itemId.localeCompare(right.itemId));
   const clipIndex = sortedTrackItems.findIndex((item) => item.itemId === clip.itemId);
   const nextCandidate = sortedTrackItems[clipIndex + 1];
